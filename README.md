@@ -11,6 +11,7 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 - **Deck counts** (new/learning/due) match desktop for all 432 decks in the test collection.
 - **Card rendering**: `anki3ds-cli shot` renders cards to PNG with the same code the 3DS uses. Malleus cloze cards, tables, images and Image Occlusion Enhanced cards render correctly.
 - **The app's screens and flows** run in a desktop simulator (`tools/uitest.py`): sign in, download, deck list, study, answer, sync, settings. Screenshots go to `build/ui-shots/`.
+- **The 3DS network code** (`3ds/source/http_3ds.cpp`: sockets, mbedTLS, chunked downloads) was compiled for the Mac with a small shim and passed the same sync test, including the 76 MB collection download. Its TLS accepts valid certificates and rejects expired or wrong-host ones.
 - The 3DS build (`make -C 3ds`) compiles and links with devkitARM r68.
 
 ## Important: AnkiWeb
@@ -27,7 +28,7 @@ You need a 3DS with the Homebrew Launcher (any custom firmware setup).
 2. **Start a sync server on the Mac.** Run `tools/run-sync-server.sh` (first run asks you to choose a username and password). It prints a URL like `http://192.168.1.20:8080/`.
 3. **Point desktop Anki at it.** In Anki: Preferences → Syncing → Self-hosted sync server → paste the URL. Sync, sign in with the username/password from step 2, and choose **Upload to server** when asked. (To go back to AnkiWeb later, clear that field and sync; Anki will ask which side to keep.)
 4. **On the 3DS:** open Anki 3DS from the Homebrew Launcher → **Sign in to my sync server** → type the URL, username, password. It downloads your collection (a few minutes over 3DS Wi-Fi).
-5. **Set the time zone** (Settings → Time zone) if the clock line on the deck list looks wrong. The 3DS clock has no time zone, and syncs are refused if the clocks disagree by more than 5 minutes.
+5. **Check the time.** The 3DS clock has no time zone, so the app uses the offset desktop Anki recorded (Settings → Time zone shows it, marked *auto*). If the clock on the deck list is wrong, fix the 3DS's own date/time in System Settings. Syncs are refused if clocks disagree by more than 5 minutes.
 6. Study a few cards, press X on the deck list to sync, then sync desktop Anki and check the reviews arrived (Browse → card info).
 
 If something fails, `sdmc:/3ds/anki3ds/log.txt` records every error message shown.
