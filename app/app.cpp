@@ -864,11 +864,11 @@ void App::draw_settings() {
     top.resize(400, 240, t.bg);
     draw_header(top, "Settings", settings_.username);
     for (int i = 0; i < SETTING_COUNT; i++) {
-        int y = 34 + i * 28;
+        int y = 30 + i * 26;
         bool sel = i == setting_sel_;
-        if (sel) top.fill_round_rect(4, y, 392, 26, 6, t.accent);
+        if (sel) top.fill_round_rect(4, y, 392, 24, 6, t.accent);
         uint32_t tc = sel ? t.accent_text : t.text;
-        text(top, fonts_, 14, (float)y + 5, SETTING_NAMES[i], 14, tc);
+        text(top, fonts_, 14, (float)y + 4, SETTING_NAMES[i], 14, tc);
         std::string value;
         switch (i) {
             case 0: value = "‹ " + std::to_string((int)std::lround(settings_.text_zoom * 100)) + "% ›"; break;
@@ -881,7 +881,7 @@ void App::draw_settings() {
             case 5: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
             default: break;
         }
-        if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 5, value, 14, tc);
+        if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 4, value, 14, tc);
     }
     bottom.resize(320, 240, t.bg);
     std::string help;

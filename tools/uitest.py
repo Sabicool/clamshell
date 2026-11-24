@@ -52,7 +52,15 @@ key X
 shot 10-after-sync
 key SELECT
 shot 11-settings
+key DOWN
+key RIGHT
+shot 12-settings-night
 key B
+select Malleus Clinical Medicine
+key A
+key A
+shot 13-night-answer
+key START
 """
 
 
