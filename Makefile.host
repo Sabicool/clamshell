@@ -6,7 +6,7 @@ CC ?= clang
 BUILD := build/host
 # -ffp-contract=off: never fuse float multiply-adds; Rust doesn't, and the
 # scheduler must round exactly like desktop Anki.
-INCLUDES := -Icore -Icore/render -Icore/js -Iapp -Ithird_party/quickjs -Ithird_party -Ithird_party/sqlite -Ithird_party/zstd \
+INCLUDES := -Icore -Icore/render -Icore/js -Iapp -Ithird_party/quickjs -Ithird_party/libwebp/src -Ithird_party/libwebp -Ithird_party -Ithird_party/sqlite -Ithird_party/zstd \
 	-Ithird_party/litehtml/include -Ithird_party/litehtml/include/litehtml \
 	-Ithird_party/litehtml/src/gumbo/include -Ithird_party/litehtml/src/gumbo/include/gumbo
 CXXFLAGS := -std=c++17 -O2 -g -ffp-contract=off -Wall -Wno-unused-function $(INCLUDES)
@@ -18,6 +18,8 @@ LH_SRC := $(wildcard third_party/litehtml/src/*.cpp)
 LH_OBJ := $(patsubst third_party/litehtml/src/%.cpp,$(BUILD)/litehtml/%.o,$(LH_SRC))
 GUMBO_SRC := $(wildcard third_party/litehtml/src/gumbo/*.c)
 GUMBO_OBJ := $(patsubst third_party/litehtml/src/gumbo/%.c,$(BUILD)/gumbo/%.o,$(GUMBO_SRC))
+WEBP_SRC := $(wildcard third_party/libwebp/src/dec/*.c third_party/libwebp/src/dsp/*.c third_party/libwebp/src/utils/*.c)
+WEBP_OBJ := $(patsubst third_party/libwebp/src/%.c,$(BUILD)/webp/%.o,$(WEBP_SRC))
 QJS_SRC := $(wildcard third_party/quickjs/*.c)
 QJS_OBJ := $(patsubst third_party/quickjs/%.c,$(BUILD)/quickjs/%.o,$(QJS_SRC))
 ZSTD_SRC := $(wildcard third_party/zstd/common/*.c third_party/zstd/compress/*.c third_party/zstd/decompress/*.c)
@@ -44,6 +46,10 @@ $(BUILD)/gumbo/%.o: third_party/litehtml/src/gumbo/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Ithird_party/litehtml/src/gumbo/include -Ithird_party/litehtml/src/gumbo/include/gumbo -w -c $< -o $@
 
+$(BUILD)/webp/%.o: third_party/libwebp/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -Ithird_party/libwebp -w -c $< -o $@
+
 $(BUILD)/quickjs/%.o: third_party/quickjs/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -D_GNU_SOURCE -w -c $< -o $@
@@ -60,10 +66,10 @@ $(BUILD)/host/%.o: host/%.cpp $(wildcard core/*.h)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/anki3ds-cli: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(QJS_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_curl.o
+$(BUILD)/anki3ds-cli: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(QJS_OBJ) $(WEBP_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_curl.o
 	$(CXX) $^ -lcurl -o $@
 
-$(BUILD)/anki3ds-sim: $(APP_OBJ) $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(QJS_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/sim.o $(BUILD)/host/http_curl.o
+$(BUILD)/anki3ds-sim: $(APP_OBJ) $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(QJS_OBJ) $(WEBP_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/sim.o $(BUILD)/host/http_curl.o
 	$(CXX) $^ -lcurl -o $@
 
 # The 3DS network stack (mbedTLS + sockets) built for the desktop, for testing.
@@ -76,7 +82,7 @@ $(BUILD)/mbedtls/%.o: third_party/mbedtls/library/%.c
 $(BUILD)/host/http_3ds.o: 3ds/source/http_3ds.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(MBED_FLAGS) -DANKI3DS_HOST_TEST -c $< -o $@
-$(BUILD)/anki3ds-cli-3dsnet: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(QJS_OBJ) $(ZSTD_OBJ) $(MBED_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_3ds.o
+$(BUILD)/anki3ds-cli-3dsnet: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(QJS_OBJ) $(WEBP_OBJ) $(ZSTD_OBJ) $(MBED_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_3ds.o
 	$(CXX) $^ -o $@
 
 test: all

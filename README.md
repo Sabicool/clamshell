@@ -51,7 +51,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 - `core/queue.cpp` ports Anki's queue builder (limit tree, gathering SQL with Anki's `fnvhash`/retrievability SQL functions, sorting, mixing, learning requeue).
 - `core/states.cpp`, `core/fsrs.cpp`, `core/rng.cpp` are close ports of Anki 26.08's `rslib/src/scheduler/states`, the `fsrs` 6.6.1 crate's inference code, and the parts of Rust's `rand` 0.9 that Anki uses for fuzz and load balancing, so random choices are bit-identical.
 - `core/sync.cpp` implements sync protocol v11 (zstd-compressed JSON over HTTP POST). It never does a full upload; if a full sync is needed it only offers to download.
-- `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml), draws text with stb_truetype and the DejaVu fonts, decodes images with stb_image and SVG masks with nanosvg, and turns `\(...\)` MathJax into Unicode/HTML.
+- `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml), draws text with stb_truetype and the DejaVu fonts, decodes images with stb_image (PNG, JPEG, GIF), libwebp (WebP, used heavily by Malleus) and nanosvg (SVG, e.g. occlusion masks), and turns `\(...\)` MathJax into Unicode/HTML.
 - `core/js/` runs template JavaScript with [QuickJS-ng](https://github.com/quickjs-ng/quickjs) against a gumbo-parsed DOM, then hands the resulting HTML to the renderer. Question and answer share one script context, like Anki's reviewer.
 - `app/` is the UI, drawn in software into two canvases. `3ds/source/main.cpp` shows them on the screens; `host/sim.cpp` runs the same app on a Mac with scripted input.
 - `3ds/source/http_3ds.cpp` does HTTP/HTTPS with mbedTLS and a bundled CA list, because the console's own TLS is too old for modern servers.
@@ -101,4 +101,4 @@ build/host/anki3ds-cli shot path/to/collection.anki2 <card id> /tmp/card ~/Libra
 
 ## Licences
 
-This project ports logic from Anki (AGPL-3.0-or-later) and is therefore AGPL-3.0-or-later. Bundled third-party code: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence), Mozilla CA bundle (MPL-2.0).
+This project ports logic from Anki (AGPL-3.0-or-later) and is therefore AGPL-3.0-or-later. Bundled third-party code: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence), Mozilla CA bundle (MPL-2.0).

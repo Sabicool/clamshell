@@ -7,6 +7,7 @@
 #include <cstring>
 #include <strings.h>
 #include <unordered_map>
+#include <vector>
 
 #include "litehtml.h"
 #include "mathlite.h"
@@ -22,6 +23,7 @@
 #define NANOSVGRAST_IMPLEMENTATION
 #include "nanosvg/nanosvg.h"
 #include "nanosvg/nanosvgrast.h"
+#include "webp/decode.h"
 
 namespace anki {
 
@@ -83,6 +85,15 @@ std::string strip_scripts(const std::string& html) {
     return out;
 }
 
+bool webp_info(const std::string& path, int& w, int& h) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    uint8_t buf[64];
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    return n >= 30 && WebPGetInfo(buf, n, &w, &h);
+}
+
 // Anki's built-in Image Occlusion draws its masks with JavaScript onto a canvas,
 // reading hidden <div class="cloze" data-shape=...> markers. Without JS we move
 // those markers into the image container as absolutely positioned boxes.
@@ -98,7 +109,8 @@ std::string io_fallback(const std::string& html, const std::string& media_dir) {
         if (end != std::string::npos) {
             std::string name = url_decode(html.substr(src + 5, end - src - 5));
             int w, h, n;
-            if (stbi_info((media_dir + "/" + name).c_str(), &w, &h, &n)) {
+            std::string ipath = media_dir + "/" + name;
+            if (stbi_info(ipath.c_str(), &w, &h, &n) || webp_info(ipath, w, h)) {
                 img_w = (float)w;
                 img_h = (float)h;
             }
@@ -232,6 +244,7 @@ public:
             int w = 0, h = 0, n;
             unsigned char* data = nullptr;
             bool svg = name.size() > 4 && strcasecmp(name.c_str() + name.size() - 4, ".svg") == 0;
+            bool webp = false;
             if (svg) {
                 // Image Occlusion masks are SVG; rasterise them with nanosvg.
                 NSVGimage* doc = nsvgParseFromFile(path.c_str(), "px", 96.0f);
@@ -247,6 +260,25 @@ public:
                 if (doc) nsvgDelete(doc);
             } else {
                 data = stbi_load(path.c_str(), &w, &h, &n, 4);
+                if (!data) {
+                    // WebP (common in shared decks like Malleus) isn't handled by stb_image
+                    FILE* f = fopen(path.c_str(), "rb");
+                    if (f) {
+                        std::vector<uint8_t> buf;
+                        fseek(f, 0, SEEK_END);
+                        long sz = ftell(f);
+                        fseek(f, 0, SEEK_SET);
+                        if (sz > 12 && sz < 32 * 1024 * 1024) {
+                            buf.resize((size_t)sz);
+                            if (fread(buf.data(), 1, buf.size(), f) == buf.size() &&
+                                memcmp(buf.data(), "RIFF", 4) == 0 && memcmp(buf.data() + 8, "WEBP", 4) == 0) {
+                                data = WebPDecodeRGBA(buf.data(), buf.size(), &w, &h);
+                                webp = data != nullptr;
+                            }
+                        }
+                        fclose(f);
+                    }
+                }
             }
             if (data) {
                 // Downscale big images up front: the 3DS screen is 400px wide.
@@ -269,6 +301,7 @@ public:
                     }
                 }
                 if (svg) free(data);
+                else if (webp) WebPFree(data);
                 else stbi_image_free(data);
             }
         }
