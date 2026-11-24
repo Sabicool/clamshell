@@ -38,7 +38,8 @@ public:
     SyncResult normal_sync(Collection& col, std::string& err);
     // Replaces the local collection with the server copy (after a temp-file
     // download + integrity check). The collection is reopened afterwards.
-    SyncResult full_download(Collection& col, std::string& err);
+    // `path` is where the collection lives (it may not exist yet on first use).
+    SyncResult full_download(Collection& col, const std::string& path, std::string& err);
 
 private:
     std::string session_;

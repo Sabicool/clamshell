@@ -233,8 +233,18 @@ void apply_chunk(Collection& col, const json& chunk) {
             note.mid = jint(n[2]);
             note.mtime = mtime;
             note.usn = (int)jint(n[4]);
-            std::string tags = n[5].is_string() ? n[5].get<std::string>() : "";
-            note.tags = tags.empty() ? "" : " " + tags + " ";
+            // split_tags + join_tags: single spaces, with a leading and trailing space
+            std::string raw = n[5].is_string() ? n[5].get<std::string>() : "";
+            std::string joined;
+            size_t i = 0;
+            while (i < raw.size()) {
+                while (i < raw.size() && isspace((unsigned char)raw[i])) i++;
+                size_t j = i;
+                while (j < raw.size() && !isspace((unsigned char)raw[j])) j++;
+                if (j > i) joined += " " + raw.substr(i, j - i);
+                i = j;
+            }
+            note.tags = joined.empty() ? "" : joined + " ";
             std::string flds = n[6].get<std::string>();
             size_t start = 0;
             while (true) {
@@ -316,6 +326,7 @@ SyncResult SyncClient::normal_sync(Collection& col, std::string& err) {
             return res;
         }
 
+    col.unbury_if_day_rolled_over(col.timing_today());
     bool local_is_newer = col.mod > remote_mod;
     int usn_at_last_sync = col.usn;
     int server_usn = remote_usn;
@@ -505,9 +516,8 @@ SyncResult SyncClient::normal_sync(Collection& col, std::string& err) {
 
 // --------------------------------------------------------------- full download
 
-SyncResult SyncClient::full_download(Collection& col, std::string& err) {
+SyncResult SyncClient::full_download(Collection& col, const std::string& path, std::string& err) {
     SyncResult res;
-    std::string path = col.path();
     std::string tmp = path + ".download";
     progress("Downloading collection...");
     FILE* f = fopen(tmp.c_str(), "wb");
@@ -556,16 +566,21 @@ SyncResult SyncClient::full_download(Collection& col, std::string& err) {
             err = "downloaded collection could not be opened";
             return res;
         }
+        register_unicase(db);
         sqlite3_stmt* st = nullptr;
         bool good = false;
+        std::string check_result;
         if (sqlite3_prepare_v2(db, "pragma quick_check", -1, &st, nullptr) == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW)
-            good = std::string((const char*)sqlite3_column_text(st, 0)) == "ok";
+        {
+            check_result = (const char*)sqlite3_column_text(st, 0);
+            good = check_result == "ok";
+        }
         sqlite3_finalize(st);
         if (good) sqlite3_exec(db, "update col set ls = mod; pragma journal_mode = delete", nullptr, nullptr, nullptr);
         sqlite3_close(db);
         if (!good) {
             remove(tmp.c_str());
-            err = "downloaded collection failed its integrity check";
+            err = "downloaded collection failed its integrity check: " + check_result;
             return res;
         }
     }

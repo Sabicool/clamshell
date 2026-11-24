@@ -98,6 +98,10 @@ static int unicase_cmp(void*, int la, const void* a, int lb, const void* b) {
     return 0;
 }
 
+void register_unicase(sqlite3* db) {
+    sqlite3_create_collation_v2(db, "unicase", SQLITE_UTF8, nullptr, unicase_cmp, nullptr);
+}
+
 // ---------------------------------------------------------------- clock
 
 Clock system_clock() {

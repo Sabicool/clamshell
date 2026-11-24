@@ -98,11 +98,13 @@ int main(int argc, char** argv) {
     if (argc < 3) return usage();
     Collection col;
     std::string err;
-    if (!col.open(argv[2], err)) {
+    bool first_download = cmd == "sync" && argc > 5 && std::string(argv[5]) == "--full-download" &&
+                          fopen(argv[2], "rb") == nullptr;
+    if (!first_download && !col.open(argv[2], err)) {
         fprintf(stderr, "open failed: %s\n", err.c_str());
         return 1;
     }
-    if (const char* off = getenv("ANKI3DS_MINUTES_WEST")) {
+    if (const char* off = getenv("ANKI3DS_MINUTES_WEST"); off && col.is_open()) {
         int v = atoi(off);
         col.clock.local_minutes_west = [v] { return (int32_t)v; };
     }
@@ -190,7 +192,7 @@ int main(int argc, char** argv) {
         SyncClient client(argv[3]);
         client.hkey = argv[4];
         bool full = argc > 5 && std::string(argv[5]) == "--full-download";
-        SyncResult res = full ? client.full_download(col, err) : client.normal_sync(col, err);
+        SyncResult res = full ? client.full_download(col, argv[2], err) : client.normal_sync(col, err);
         printf("result: %s\n%s\n", sync_status_name(res.status), res.message.c_str());
         if (!err.empty()) printf("error: %s\n", err.c_str());
         return res.status == SyncStatus::Failed ? 1 : 0;

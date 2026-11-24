@@ -183,6 +183,9 @@ private:
     sqlite3_stmt* s_ = nullptr;
 };
 
+// Registers Anki's "unicase" collation on a raw connection.
+void register_unicase(sqlite3* db);
+
 // Time source; the 3DS and tests can substitute their own.
 struct Clock {
     std::function<int64_t()> now_millis;
