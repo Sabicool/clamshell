@@ -191,6 +191,8 @@ bool ensure_rollback_journal(const std::string& path);
 
 // Registers Anki's "unicase" collation on a raw connection.
 void register_unicase(sqlite3* db);
+// Registers rslib's SQL helpers (fnvhash, extract_fsrs_*) used for queue ordering.
+void register_anki_functions(sqlite3* db);
 
 // Time source; the 3DS and tests can substitute their own.
 struct Clock {

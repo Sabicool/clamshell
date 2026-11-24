@@ -6,7 +6,7 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 
 ## Verified on the Mac
 
-- **Scheduling matches desktop Anki exactly.** `tools/difftest.py` compares this code with the official `anki` 26.08 Python package (the same Rust engine as desktop). On a copy of a real 17,000-card FSRS collection, all 9,335 active cards produce identical next states (intervals, stability, difficulty, steps), with fuzz on. Studying every due card in the Malleus deck (65 answers, load balancer on) produced identical card rows and review-log rows.
+- **Scheduling matches desktop Anki exactly.** `tools/difftest.py` compares this code with the official `anki` 26.08 Python package (the same Rust engine as desktop). On a copy of a real 17,000-card FSRS collection, all 9,335 active cards produce identical next states (intervals, stability, difficulty, steps), with fuzz on. The study queue is a port of Anki's queue builder too: studying a deck with the 3DS picking its own cards (Malleus: 65 cards; CICM Primary, with learning steps; and a filtered deck: 41 cards) chose the same cards in the same order as Anki, with identical card rows and review-log rows afterwards.
 - **Sync round trip.** `tools/synctest.py` runs Anki's own sync server locally: desktop uploads, the 3DS client downloads, both sides study and edit, both sync. Afterwards all cards, notes, review-log rows and decks are identical on both sides (decks differ from before only in their studied-today counters, so daily limits carry across devices), and the 3DS file passes SQLite's integrity check. Per-deck image download is checked byte for byte.
 - **Deck counts** (new/learning/due) match desktop for all 432 decks in the test collection.
 - **Card rendering**: `anki3ds-cli shot` renders cards to PNG with the same code the 3DS uses. Malleus cloze cards, tables, images, Image Occlusion Enhanced and Anki's built-in Image Occlusion render correctly.
@@ -48,6 +48,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 ## How it works
 
 - `core/` is portable C++17: collection access (SQLite, schema 18), protobuf decoding, the scheduler, sync, templates and the renderer. It builds for the 3DS and for macOS/Linux.
+- `core/queue.cpp` ports Anki's queue builder (limit tree, gathering SQL with Anki's `fnvhash`/retrievability SQL functions, sorting, mixing, learning requeue).
 - `core/states.cpp`, `core/fsrs.cpp`, `core/rng.cpp` are close ports of Anki 26.08's `rslib/src/scheduler/states`, the `fsrs` 6.6.1 crate's inference code, and the parts of Rust's `rand` 0.9 that Anki uses for fuzz and load balancing, so random choices are bit-identical.
 - `core/sync.cpp` implements sync protocol v11 (zstd-compressed JSON over HTTP POST). It never does a full upload; if a full sync is needed it only offers to download.
 - `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml), draws text with stb_truetype and the DejaVu fonts, decodes images with stb_image and SVG masks with nanosvg, and turns `\(...\)` MathJax into Unicode/HTML.
@@ -59,7 +60,6 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 
 - **JavaScript runs, but there's no pointer.** Scripts run under QuickJS against a small DOM (elements, classes, styles, events, timers, sessionStorage), and ◀ ▶ reach a card's keyboard shortcuts. The card is on the top screen, which isn't touch-sensitive, so buttons inside cards can't be clicked and are hidden; *Show extra sections* opens the sections Malleus and AnKing hide behind buttons. Scripts can be turned off in Settings.
 - **No audio and no typed answers** yet. Undo keeps the last 30 answers of the current session.
-- **The study order is a re-implementation** of Anki's queue builder. Counts match desktop exactly; the exact order in which cards appear may differ slightly. Each answer is still scheduled exactly as desktop would.
 - **Cards that have never had FSRS memory states computed** (rare; usually suspended cards from before FSRS was turned on) show an error when answered. Opening the deck options on desktop and saving recomputes them.
 - **Filtered decks** work for rescheduling decks; preview decks are untested.
 - MathJax support is an approximation (symbols, Greek, sub/superscripts, fractions, roots, `\ce{}`); complex layouts show as plain text.

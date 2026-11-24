@@ -124,6 +124,117 @@ void register_unicase(sqlite3* db) {
     sqlite3_create_collation_v2(db, "unicase", SQLITE_UTF8, nullptr, unicase_cmp, nullptr);
 }
 
+// ---- SQL functions rslib registers (rslib/src/storage/sqlite.rs), used by the queue builder
+
+static void sql_fnvhash(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    uint64_t h = 0xcbf29ce484222325ULL;  // FNV-1a 64, as the `fnv` crate
+    for (int i = 0; i < argc; i++) {
+        int64_t v = sqlite3_value_int64(argv[i]);
+        unsigned char b[8];
+        memcpy(b, &v, 8);  // write_i64 -> native-endian bytes (little-endian here)
+        for (unsigned char c : b) {
+            h ^= c;
+            h *= 0x100000001b3ULL;
+        }
+    }
+    sqlite3_result_int64(ctx, (int64_t)h);
+}
+
+static bool card_data_arg(sqlite3_value* v, Card& out) {
+    if (sqlite3_value_type(v) != SQLITE_TEXT) return false;
+    const char* t = (const char*)sqlite3_value_text(v);
+    if (!t || !*t) return false;
+    out.parse_data(t);
+    return true;
+}
+
+static float current_retrievability(const MemoryState& s, float days_elapsed, float decay) {
+    float factor = std::pow(0.9f, 1.0f / -decay) - 1.0f;
+    return std::pow(days_elapsed / s.stability * factor + 1.0f, -decay);
+}
+
+static void sql_extract_fsrs_variable(sqlite3_context* ctx, int, sqlite3_value** argv) {
+    Card c;
+    if (!card_data_arg(argv[0], c)) { sqlite3_result_null(ctx); return; }
+    const char* key = (const char*)sqlite3_value_text(argv[1]);
+    std::optional<float> v;
+    if (key && !strcmp(key, "s") && c.memory_state) v = c.memory_state->stability;
+    else if (key && !strcmp(key, "d") && c.memory_state) v = c.memory_state->difficulty;
+    else if (key && !strcmp(key, "dr")) v = c.desired_retention;
+    if (v) sqlite3_result_double(ctx, (double)*v);
+    else sqlite3_result_null(ctx);
+}
+
+static void sql_extract_fsrs_retrievability(sqlite3_context* ctx, int, sqlite3_value** argv) {
+    Card c;
+    if (!card_data_arg(argv[0], c) || sqlite3_value_type(argv[1]) != SQLITE_INTEGER ||
+        sqlite3_value_type(argv[5]) != SQLITE_INTEGER) {
+        sqlite3_result_null(ctx);
+        return;
+    }
+    int64_t due = sqlite3_value_int64(argv[1]);
+    uint32_t now = (uint32_t)sqlite3_value_int64(argv[5]);
+    auto sat = [](uint32_t a, uint32_t b) { return a > b ? a - b : 0u; };
+    uint32_t secs;
+    if (c.last_review_time) {
+        secs = sat(now, (uint32_t)*c.last_review_time);
+    } else if (due > 365000) {
+        uint32_t ivl = (uint32_t)sqlite3_value_int64(argv[2]);
+        secs = sat(now, sat((uint32_t)due, ivl));
+    } else {
+        uint32_t ivl = (uint32_t)sqlite3_value_int64(argv[2]);
+        uint32_t today = (uint32_t)sqlite3_value_int64(argv[3]);
+        secs = sat(today, sat((uint32_t)due, ivl)) * 86400u;
+    }
+    float decay = c.decay.value_or(0.5f);
+    if (!c.memory_state) { sqlite3_result_null(ctx); return; }
+    sqlite3_result_double(ctx, (double)current_retrievability(*c.memory_state, (float)secs / 86400.0f, decay));
+}
+
+static void sql_extract_fsrs_relative_retrievability(sqlite3_context* ctx, int, sqlite3_value** argv) {
+    if (sqlite3_value_type(argv[1]) != SQLITE_INTEGER || sqlite3_value_type(argv[2]) != SQLITE_INTEGER ||
+        sqlite3_value_type(argv[5]) != SQLITE_INTEGER) {
+        sqlite3_result_null(ctx);
+        return;
+    }
+    int64_t due = sqlite3_value_int64(argv[1]);
+    int64_t interval = sqlite3_value_int64(argv[2]);
+    uint32_t now = (uint32_t)sqlite3_value_int64(argv[5]);
+    auto sat = [](uint32_t a, uint32_t b) { return a > b ? a - b : 0u; };
+    uint32_t secs_elapsed;
+    if (due > 365000) {
+        secs_elapsed = sat(now, (uint32_t)due);
+    } else {
+        uint32_t today = (uint32_t)sqlite3_value_int64(argv[3]);
+        int64_t review_day = due - interval;  // i64 saturating_sub never saturates here
+        secs_elapsed = sat(today, (uint32_t)review_day) * 86400u;
+    }
+    Card c;
+    if (card_data_arg(argv[0], c) && c.memory_state && c.desired_retention) {
+        float desired = std::max(*c.desired_retention, 0.0001f);
+        float decay = c.decay.value_or(0.5f);
+        uint32_t secs = c.last_review_time ? sat(now, (uint32_t)*c.last_review_time) : secs_elapsed;
+        float r = std::max(current_retrievability(*c.memory_state, (float)secs / 86400.0f, decay), 0.0001f);
+        float v = -(std::pow(r, -1.0f / decay) - 1.0f) / (std::pow(desired, -1.0f / decay) - 1.0f);
+        sqlite3_result_double(ctx, (double)v);
+        return;
+    }
+    // FSRS data missing: SM-2 style ordering
+    float days = (float)(secs_elapsed / 86400u);
+    float ivl = (float)std::max<int64_t>(interval, 1);
+    sqlite3_result_double(ctx, (double)(-((days + 0.001f) / ivl)));
+}
+
+void register_anki_functions(sqlite3* db) {
+    sqlite3_create_function(db, "fnvhash", -1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr, sql_fnvhash, nullptr, nullptr);
+    sqlite3_create_function(db, "extract_fsrs_variable", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr,
+                            sql_extract_fsrs_variable, nullptr, nullptr);
+    sqlite3_create_function(db, "extract_fsrs_retrievability", 6, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr,
+                            sql_extract_fsrs_retrievability, nullptr, nullptr);
+    sqlite3_create_function(db, "extract_fsrs_relative_retrievability", 6, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                            nullptr, sql_extract_fsrs_relative_retrievability, nullptr, nullptr);
+}
+
 // ---------------------------------------------------------------- clock
 
 Clock system_clock() {
@@ -305,6 +416,7 @@ bool Collection::open(const std::string& path, std::string& err) {
     }
     path_ = path;
     sqlite3_create_collation_v2(db_.h, "unicase", SQLITE_UTF8, nullptr, unicase_cmp, nullptr);
+    register_anki_functions(db_.h);
     db_.exec("pragma cache_size = -8000");
     db_.exec("pragma temp_store = memory");
     // Anki uses WAL on desktop; a single-file journal is safer on an SD card.

@@ -1,21 +1,24 @@
 #include "queue.h"
 
 #include <algorithm>
+#include <cstring>
+#include <functional>
 #include <map>
-#include <set>
 #include <unordered_map>
 
-#include "rng.h"
+#include "sqlite3.h"
 
 namespace anki {
 
 namespace {
 
+// ---------------------------------------------------------------- limits.rs
+
 struct Limit {
     int64_t new_left = 0, review_left = 0;
 };
 
-// Remaining limits for one deck today: deck override > preset, minus studied.
+// Remaining limits for one deck today (used by the deck list).
 Limit deck_limit(Collection& col, const Deck& d, uint32_t today) {
     const DeckConfig& c = col.config_for_deck(d);
     int64_t new_lim = c.new_per_day, rev_lim = c.reviews_per_day;
@@ -25,8 +28,8 @@ Limit deck_limit(Collection& col, const Deck& d, uint32_t today) {
     else if (d.review_limit) rev_lim = *d.review_limit;
     int64_t new_studied = 0, rev_studied = 0;
     if ((uint32_t)d.common.u64(3) == today) {
-        new_studied = d.common.i64(4);
-        rev_studied = d.common.i64(5);
+        new_studied = (int32_t)d.common.u64(4);
+        rev_studied = (int32_t)d.common.u64(5);
     }
     Limit l;
     l.new_left = std::max<int64_t>(new_lim - new_studied, 0);
@@ -34,315 +37,519 @@ Limit deck_limit(Collection& col, const Deck& d, uint32_t today) {
     return l;
 }
 
-// Stable pseudo-random order that does not change within a day (like Anki's
-// "random" sorts, which hash the card id with the day number).
-uint64_t day_hash(int64_t id, uint32_t today) {
-    StdRng r = StdRng::seed_from_u64((uint64_t)id ^ ((uint64_t)today << 32));
-    return r.next_u64();
+struct Remaining {
+    uint32_t review = 9999, newc = 9999;
+    bool cap_new_to_review = false;
+};
+
+Remaining remaining_for(Collection& col, const Deck& d, uint32_t today, bool new_ignores_review) {
+    Remaining r;
+    if (d.filtered) return r;
+    auto it = col.deck_configs.find(d.config_id);
+    if (it == col.deck_configs.end()) return r;
+    const DeckConfig& c = it->second;
+    int32_t review_limit = (int32_t)c.reviews_per_day, new_limit = (int32_t)c.new_per_day;
+    if (d.has_review_limit_today && d.review_limit_today_day == today) review_limit = (int32_t)d.review_limit_today;
+    else if (d.review_limit) review_limit = (int32_t)*d.review_limit;
+    if (d.has_new_limit_today && d.new_limit_today_day == today) new_limit = (int32_t)d.new_limit_today;
+    else if (d.new_limit) new_limit = (int32_t)*d.new_limit;
+    int32_t new_today = 0, review_today = 0;
+    if ((uint32_t)d.common.u64(3) == today) {
+        new_today = (int32_t)d.common.u64(4);
+        review_today = (int32_t)d.common.u64(5);
+    }
+    review_limit -= review_today;
+    new_limit -= new_today;
+    if (!new_ignores_review) {
+        review_limit -= new_today;
+        new_limit = std::min(new_limit, review_limit);
+    }
+    r.review = (uint32_t)std::max(review_limit, 0);
+    r.newc = (uint32_t)std::max(new_limit, 0);
+    r.cap_new_to_review = !new_ignores_review;
+    return r;
+}
+
+struct LimitTree {
+    struct Node {
+        int level;
+        Remaining lim;
+        int parent;
+        std::vector<int> children;
+    };
+    std::vector<Node> nodes;
+    std::unordered_map<int64_t, int> map;
+
+    void cap(Remaining& a, const Remaining& b) {
+        a.review = std::min(a.review, b.review);
+        a.newc = std::min(a.newc, b.newc);
+    }
+    void build(Collection& col, const std::vector<const Deck*>& decks, uint32_t today, bool nir) {
+        auto level = [](const Deck* d) { return (int)std::count(d->name.begin(), d->name.end(), '\x1f') + 1; };
+        nodes.push_back({level(decks[0]), remaining_for(col, *decks[0], today, nir), -1, {}});
+        map[decks[0]->id] = 0;
+        size_t i = 1;
+        std::function<void(int)> add_children = [&](int parent) {
+            while (i < decks.size()) {
+                int l = level(decks[i]);
+                int pl = nodes[parent].level;
+                if (l <= pl) break;
+                if (l == pl + 1) {
+                    Remaining r = remaining_for(col, *decks[i], today, nir);
+                    cap(r, nodes[parent].lim);
+                    int id = (int)nodes.size();
+                    nodes.push_back({l, r, parent, {}});
+                    nodes[parent].children.push_back(id);
+                    map[decks[i]->id] = id;
+                    i++;
+                } else if (!nodes[parent].children.empty()) {
+                    add_children(nodes[parent].children.back());
+                } else {
+                    i++;
+                }
+            }
+        };
+        add_children(0);
+    }
+    bool has(int64_t did) const { return map.count(did) > 0; }
+    uint32_t get(int node, bool is_new) const { return is_new ? nodes[node].lim.newc : nodes[node].lim.review; }
+    bool root_reached(bool is_new) const { return get(0, is_new) == 0; }
+    // rslib returns an error for decks missing from the map; treat as reached
+    bool reached(int64_t did, bool is_new) const {
+        auto it = map.find(did);
+        return it == map.end() || get(it->second, is_new) == 0;
+    }
+    void cap_desc(int node, const Remaining& l) {
+        cap(nodes[node].lim, l);
+        for (int c : nodes[node].children) cap_desc(c, l);
+    }
+    void decrement(int64_t did, bool is_new) {
+        auto it = map.find(did);
+        if (it == map.end()) return;
+        for (int n = it->second; n >= 0; n = nodes[n].parent) {
+            Remaining& r = nodes[n].lim;
+            Remaining before = r;
+            if (!is_new) {
+                r.review = r.review > 0 ? r.review - 1 : 0;
+                if (r.cap_new_to_review) r.newc = std::min(r.newc, r.review);
+            } else {
+                r.newc = r.newc > 0 ? r.newc - 1 : 0;
+            }
+            bool zero = (before.review > 0 && r.review == 0) || (before.newc > 0 && r.newc == 0);
+            if (zero) cap_desc(n, r);
+        }
+    }
+};
+
+struct Bury {
+    bool bury_new = false, bury_reviews = false, bury_il = false;
+};
+
+// ---------------------------------------------------------------- iterators
+
+template <class T>
+std::vector<T> intersperse(const std::vector<T>& one, const std::vector<T>& two) {
+    std::vector<T> out;
+    size_t i1 = 0, i2 = 0;
+    float ratio = (float)(one.size() + 1) / (float)(two.size() + 1);
+    while (i1 < one.size() || i2 < two.size()) {
+        if (i1 < one.size() && i2 < two.size()) {
+            float rel = (float)(i2 + 1) * ratio;
+            if (rel < (float)(i1 + 1)) out.push_back(two[i2++]);
+            else out.push_back(one[i1++]);
+        } else if (i1 < one.size()) {
+            out.push_back(one[i1++]);
+        } else {
+            out.push_back(two[i2++]);
+        }
+    }
+    return out;
+}
+
+template <class T>
+std::vector<T> chain(const std::vector<T>& a, const std::vector<T>& b) {
+    std::vector<T> out = a;
+    out.insert(out.end(), b.begin(), b.end());
+    return out;
+}
+
+uint64_t fnv_i64s(std::initializer_list<int64_t> vals) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (int64_t v : vals) {
+        unsigned char b[8];
+        memcpy(b, &v, 8);
+        for (unsigned char c : b) {
+            h ^= c;
+            h *= 0x100000001b3ULL;
+        }
+    }
+    return h;
+}
+
+bool learn_less(const StudyQueue::LearnEntry& a, const StudyQueue::LearnEntry& b) {
+    // cmp_by_reps_then_due: (reps == 0, due)
+    bool az = a.reps == 0, bz = b.reps == 0;
+    if (az != bz) return !az && bz;
+    return a.due < b.due;
 }
 
 }  // namespace
 
+// ---------------------------------------------------------------- builder
+
 void StudyQueue::build() {
     main_.clear();
     learning_.clear();
+    counts_ = DeckCounts();
     SchedTimingToday t = col_.timing_today();
     col_.unbury_if_day_rolled_over(t);
-    learn_ahead_secs_ = (uint32_t)col_.config_int("collapseTime", 1200);
+    learn_ahead_secs_ = col_.config_int("collapseTime", 1200);
     const Deck* root = col_.deck(deck_id_);
     if (!root) return;
+    bool nir = col_.config_bool("newCardsIgnoreReviewLimit", false);
+    bool all_parents = col_.config_bool("applyAllParentLimits", false);
+    bool fsrs = col_.config_bool("fsrs", false);
+    sqlite3* db = col_.db();
 
-    std::vector<int64_t> dids = col_.child_deck_ids(deck_id_);
-    std::set<int64_t> didset(dids.begin(), dids.end());
-    // Limit nodes: every deck in the tree, plus parents if applyAllParentLimits.
-    std::unordered_map<int64_t, Limit> limits;
-    for (int64_t did : dids) {
-        const Deck* d = col_.deck(did);
-        if (d && !d->filtered) limits[did] = deck_limit(col_, *d, t.days_elapsed);
-    }
-    std::vector<int64_t> extra_parents;
-    if (col_.config_bool("applyAllParentLimits", false))
-        for (int64_t p : col_.parent_deck_ids(deck_id_)) {
-            const Deck* d = col_.deck(p);
-            if (d && !d->filtered) {
-                limits[p] = deck_limit(col_, *d, t.days_elapsed);
-                extra_parents.push_back(p);
-            }
-        }
-    bool new_ignores_review_limit = col_.config_bool("newCardsIgnoreReviewLimit", false);
-    // Path from a card's deck up to the selected deck (and beyond, if enabled).
-    std::unordered_map<int64_t, std::vector<int64_t>> path_cache;
-    auto path_for = [&](int64_t did) -> const std::vector<int64_t>& {
-        auto it = path_cache.find(did);
-        if (it != path_cache.end()) return it->second;
-        std::vector<int64_t> p{did};
-        if (did != deck_id_)
-            for (int64_t parent : col_.parent_deck_ids(did)) {
-                p.push_back(parent);
-                if (parent == deck_id_) break;
-            }
-        for (int64_t e : extra_parents) p.push_back(e);
-        return path_cache[did] = p;
-    };
-    auto take = [&](int64_t did, bool is_new) -> bool {
-        const auto& p = path_for(did);
-        for (int64_t d : p) {
-            auto it = limits.find(d);
-            if (it == limits.end()) continue;
-            if (is_new) {
-                if (it->second.new_left <= 0) return false;
-                if (!new_ignores_review_limit && it->second.review_left <= 0) return false;
-            } else if (it->second.review_left <= 0) {
-                return false;
-            }
-        }
-        for (int64_t d : p) {
-            auto it = limits.find(d);
-            if (it == limits.end()) continue;
-            if (is_new) {
-                it->second.new_left--;
-                if (!new_ignores_review_limit) it->second.review_left--;
-            } else {
-                it->second.review_left--;
-            }
-        }
-        return true;
-    };
-
-    const DeckConfig& rootcfg = col_.config_for_deck(*root);
-    std::set<int64_t> seen_notes_new, seen_notes_rev;
-    bool bury_new = rootcfg.bury_new, bury_rev = rootcfg.bury_reviews, bury_il = rootcfg.bury_interday_learning;
-
-    struct Cand { int64_t cid, nid, did; int32_t due; uint32_t ivl; uint16_t factor; int queue; int ord; int64_t pos; };
-    std::vector<Cand> learn, daylearn, reviews, news;
+    // active_decks: the selected deck and its children
     {
-        Stmt s(col_.db(), "select id, nid, did, due, ivl, factor, queue, ord, odid, odue from cards where queue in (0,1,2,3,4)");
-        int64_t learn_cutoff = t.now + learn_ahead_secs_;
+        Db d{db};
+        d.exec("drop table if exists active_decks; create temporary table active_decks (id integer not null unique);");
+        Stmt s(db, "insert into active_decks select id from decks where name = ?1 or (name >= ?2 and name < ?3)");
+        s.bind(1, root->name).bind(2, root->name + "\x1f").bind(3, root->name + "\x20");
+        s.step();
+        d.h = nullptr;
+    }
+    // limit tree over [parents..., root, children sorted by name]
+    std::vector<const Deck*> decks;
+    {
+        Stmt s(db, "select id from decks where name >= ?1 and name < ?2 order by name");
+        s.bind(1, root->name + "\x1f").bind(2, root->name + "\x20");
+        decks.push_back(root);
+        while (s.step())
+            if (const Deck* d = col_.deck(s.i64(0))) decks.push_back(d);
+        if (all_parents)
+            for (int64_t pid : col_.parent_deck_ids(deck_id_))
+                if (const Deck* p = col_.deck(pid)) decks.insert(decks.begin(), p);
+    }
+    LimitTree limits;
+    limits.build(col_, decks, t.days_elapsed, nir);
+
+    // sort options come from the selected deck's preset
+    int review_order = 0, gather = 0, new_sort = 1, il_mix = 0, new_mix = 0;
+    {
+        auto it = root->filtered ? col_.deck_configs.end() : col_.deck_configs.find(root->config_id);
+        if (it != col_.deck_configs.end()) {
+            review_order = it->second.review_order;
+            gather = it->second.new_card_gather_priority;
+            new_sort = it->second.new_card_sort_order;
+            il_mix = it->second.interday_learning_mix;
+            new_mix = it->second.new_mix;
+        }
+    }
+    // burying state per note (get_and_update_bury_mode_for_note)
+    std::unordered_map<int64_t, Bury> seen;
+    auto bury_mode_for_deck = [&](int64_t did) {
+        Bury b;
+        const Deck* d = col_.deck(did);
+        if (d && !d->filtered) {
+            auto it = col_.deck_configs.find(d->config_id);
+            if (it != col_.deck_configs.end()) {
+                b.bury_new = it->second.bury_new;
+                b.bury_reviews = it->second.bury_reviews;
+                b.bury_il = it->second.bury_interday_learning;
+            }
+        }
+        return b;
+    };
+    auto update_bury = [&](int64_t nid, int64_t home_did) -> std::optional<Bury> {
+        Bury mode = bury_mode_for_deck(home_did);
+        auto it = seen.find(nid);
+        if (it == seen.end()) {
+            seen[nid] = mode;
+            return std::nullopt;
+        }
+        Bury prev = it->second;
+        it->second.bury_new |= mode.bury_new;
+        it->second.bury_reviews |= mode.bury_reviews;
+        it->second.bury_il |= mode.bury_il;
+        return prev;
+    };
+
+    struct Due {
+        int64_t id, nid, due, ivl, mtime, did, odid;
+        uint32_t reps;
+    };
+    struct New {
+        int64_t id, nid, ord, mtime, did, odid;
+        uint64_t hash;
+    };
+    std::vector<Due> learning, day_learning, review;
+    std::vector<New> news;
+
+    // 1. intraday learning (due before the next day starts)
+    {
+        Stmt s(db,
+               "select id, nid, due, cast(mod as integer), did, odid, reps from cards where did in (select id from "
+               "active_decks) and (queue in (1, 4) and due <= ?)");
+        s.bind(1, t.next_day_at);
         while (s.step()) {
-            Cand c{s.i64(0), s.i64(1), s.i64(2), (int32_t)s.i64(3), (uint32_t)s.i64(4), (uint16_t)s.i64(5),
-                   (int)s.i64(6), (int)s.i64(7), 0};
-            if (!didset.count(c.did)) continue;
-            switch (c.queue) {
-                case Q_LEARN:
-                case Q_PREVIEW:
-                    if (c.due < learn_cutoff + 86400) learn.push_back(c);
-                    break;
-                case Q_DAY_LEARN:
-                    if (c.due <= (int32_t)t.days_elapsed) daylearn.push_back(c);
-                    break;
-                case Q_REVIEW:
-                    if (c.due <= (int32_t)t.days_elapsed) reviews.push_back(c);
-                    break;
-                case Q_NEW:
-                    news.push_back(c);
-                    break;
+            Due c{s.i64(0), s.i64(1), s.i64(2), 0, s.i64(3), s.i64(4), s.i64(5), (uint32_t)s.i64(6)};
+            update_bury(c.nid, c.odid ? c.odid : c.did);
+            learning.push_back(c);
+        }
+    }
+    // 2/3. interday learning, then reviews, in the preset's review order
+    auto order_sql = [&]() {
+        std::vector<std::string> sub;
+        std::string today = std::to_string(t.days_elapsed), nda = std::to_string(t.next_day_at),
+                    now = std::to_string(t.now);
+        auto rfsrs = [&](const char* ord) {
+            return "extract_fsrs_retrievability(data, case when odue !=0 then odue else due end, ivl, " + today + ", " +
+                   nda + ", " + now + ") " + ord;
+        };
+        switch (review_order) {
+            case 0: sub = {"due"}; break;
+            case 1: sub = {"due", "(select rowid from active_decks ad where ad.id = did)"}; break;
+            case 2: sub = {"(select rowid from active_decks ad where ad.id = did)", "due"}; break;
+            case 3: sub = {"ivl asc"}; break;
+            case 4: sub = {"ivl desc"}; break;
+            case 5: sub = {fsrs ? "extract_fsrs_variable(data, 'd') desc" : "factor asc"}; break;
+            case 6: sub = {fsrs ? "extract_fsrs_variable(data, 'd') asc" : "factor desc"}; break;
+            case 7: sub = {rfsrs("asc")}; break;
+            case 11: sub = {rfsrs("desc")}; break;
+            case 12:
+                sub = {fsrs ? "extract_fsrs_relative_retrievability(data, case when odue !=0 then odue else due end, ivl, " +
+                                  today + ", " + nda + ", " + now + ") asc"
+                            : "-(1 + cast(" + today + "-due+0.001 as real)/ivl) asc"};
+                break;
+            case 8: break;
+            case 9: sub = {"nid asc, ord asc"}; break;
+            case 10: sub = {"nid desc, ord asc"}; break;
+        }
+        sub.push_back("fnvhash(id, mod)");
+        std::string o;
+        for (size_t i = 0; i < sub.size(); i++) o += (i ? ", " : "") + sub[i];
+        return o;
+    };
+    for (int pass = 0; pass < 2; pass++) {
+        bool learning_pass = pass == 0;
+        if (limits.root_reached(false)) break;
+        std::string sql =
+            "select id, nid, due, cast(ivl as integer), cast(mod as integer), did, odid, reps from cards where did in "
+            "(select id from active_decks) and (queue = ? and due <= ?) order by " +
+            order_sql();
+        Stmt s(db, sql.c_str());
+        s.bind(1, (int64_t)(learning_pass ? Q_DAY_LEARN : Q_REVIEW)).bind(2, (int64_t)t.days_elapsed);
+        while (s.step()) {
+            if (limits.root_reached(false)) break;
+            Due c{s.i64(0), s.i64(1), s.i64(2), s.i64(3), s.i64(4), s.i64(5), s.i64(6), (uint32_t)s.i64(7)};
+            if (limits.reached(c.did, false)) continue;
+            auto prev = update_bury(c.nid, c.odid ? c.odid : c.did);
+            bool bury = prev && (learning_pass ? prev->bury_il : prev->bury_reviews);
+            if (bury) continue;
+            (learning_pass ? day_learning : review).push_back(c);
+            limits.decrement(c.did, false);
+        }
+    }
+    // 4. new cards, gathered by priority
+    {
+        uint32_t salt = t.days_elapsed * 2654435761u;  // knuth_salt
+        std::string by_deck_sort = "due ASC, ord ASC";
+        std::string sorted;
+        switch (gather) {
+            case 1: sorted = "due ASC, ord ASC"; break;
+            case 2: sorted = "due DESC, ord ASC"; break;
+            case 3: sorted = "fnvhash(nid, " + std::to_string(salt) + "), ord ASC"; break;
+            case 4: sorted = "fnvhash(id, " + std::to_string(salt) + ")"; break;
+            case 5: by_deck_sort = "fnvhash(nid, " + std::to_string(salt) + "), ord ASC"; break;
+            default: break;
+        }
+        auto take = [&](const Stmt& s) {
+            New c{s.i64(0), s.i64(1), s.i64(2), s.i64(3), s.i64(4), s.i64(5), 0};
+            if (limits.reached(c.did, true)) return;
+            auto prev = update_bury(c.nid, c.odid ? c.odid : c.did);
+            if (prev && prev->bury_new) return;
+            news.push_back(c);
+            limits.decrement(c.did, true);
+        };
+        if (gather == 0 || gather == 5) {
+            std::vector<int64_t> active;
+            Stmt d(db, "select id from decks where id in (select id from active_decks) order by name");
+            while (d.step()) active.push_back(d.i64(0));
+            for (int64_t did : active) {
+                if (limits.root_reached(true)) break;
+                if (limits.reached(did, true)) continue;
+                std::string sql = "select id, nid, ord, cast(mod as integer), did, odid from cards where did = ? and "
+                                  "queue = 0 order by " + by_deck_sort;
+                Stmt s(db, sql.c_str());
+                s.bind(1, did);
+                while (s.step()) {
+                    if (limits.reached(did, true)) break;
+                    take(s);
+                }
+            }
+        } else {
+            std::string sql = "select id, nid, ord, cast(mod as integer), did, odid from cards where did in (select id "
+                              "from active_decks) and queue = 0 order by " + sorted;
+            Stmt s(db, sql.c_str());
+            while (s.step()) {
+                if (limits.root_reached(true)) break;
+                take(s);
             }
         }
     }
-    // Intraday learning: no limit, ordered by due time.
-    for (auto& c : learn) learning_.push_back({c.due, c.cid});
-    sort_learning();
-    if (bury_il || bury_rev || bury_new)
-        for (auto& c : learn) { seen_notes_new.insert(c.nid); seen_notes_rev.insert(c.nid); }
-
-    // Interday learning (counts against the review limit).
-    std::sort(daylearn.begin(), daylearn.end(), [](const Cand& a, const Cand& b) {
-        return a.due != b.due ? a.due < b.due : a.cid < b.cid;
-    });
-    std::vector<QueuedCard> il_out;
-    for (auto& c : daylearn) {
-        if (bury_il && seen_notes_rev.count(c.nid)) continue;
-        if (!take(c.did, false)) continue;
-        il_out.push_back({c.cid, "daylearn"});
-        seen_notes_rev.insert(c.nid);
-    }
-
-    // Reviews, in the preset's review order.
-    uint32_t today = t.days_elapsed;
-    auto deck_name = [&](int64_t did) { const Deck* d = col_.deck(did); return d ? d->name : std::string(); };
-    switch (rootcfg.review_order) {
-        case 1:  // day then deck
-            std::sort(reviews.begin(), reviews.end(), [&](const Cand& a, const Cand& b) {
-                if (a.due != b.due) return a.due < b.due;
-                return deck_name(a.did) < deck_name(b.did);
+    // sort_new
+    int64_t day = t.days_elapsed;
+    switch (new_sort) {
+        case 0:
+            std::stable_sort(news.begin(), news.end(), [](const New& a, const New& b) { return a.ord < b.ord; });
+            break;
+        case 2:
+            for (auto& c : news) c.hash = fnv_i64s({c.id, day});
+            std::sort(news.begin(), news.end(), [](const New& a, const New& b) {
+                return a.ord != b.ord ? a.ord < b.ord : a.hash < b.hash;
             });
             break;
-        case 2:  // deck then day
-            std::sort(reviews.begin(), reviews.end(), [&](const Cand& a, const Cand& b) {
-                auto na = deck_name(a.did), nb = deck_name(b.did);
-                if (na != nb) return na < nb;
-                return a.due < b.due;
-            });
-            break;
-        case 3: std::sort(reviews.begin(), reviews.end(), [](const Cand& a, const Cand& b) { return a.ivl < b.ivl; }); break;
-        case 4: std::sort(reviews.begin(), reviews.end(), [](const Cand& a, const Cand& b) { return a.ivl > b.ivl; }); break;
-        case 5: std::sort(reviews.begin(), reviews.end(), [](const Cand& a, const Cand& b) { return a.factor < b.factor; }); break;
-        case 6: std::sort(reviews.begin(), reviews.end(), [](const Cand& a, const Cand& b) { return a.factor > b.factor; }); break;
-        case 8:
-            std::sort(reviews.begin(), reviews.end(), [&](const Cand& a, const Cand& b) {
-                return day_hash(a.cid, today) < day_hash(b.cid, today);
-            });
-            break;
-        case 9: std::sort(reviews.begin(), reviews.end(), [](const Cand& a, const Cand& b) { return a.nid < b.nid; }); break;
-        case 10: std::sort(reviews.begin(), reviews.end(), [](const Cand& a, const Cand& b) { return a.nid > b.nid; }); break;
-        default:  // day (and retrievability orders, approximated by overdueness)
-            std::sort(reviews.begin(), reviews.end(), [&](const Cand& a, const Cand& b) {
-                if (a.due != b.due) return a.due < b.due;
-                return day_hash(a.cid, today) < day_hash(b.cid, today);
-            });
-    }
-    std::vector<QueuedCard> rev_out;
-    for (auto& c : reviews) {
-        if (bury_rev && seen_notes_rev.count(c.nid)) continue;
-        if (!take(c.did, false)) continue;
-        rev_out.push_back({c.cid, "review"});
-        seen_notes_rev.insert(c.nid);
-    }
-
-    // New cards: gather by priority, then sort.
-    std::sort(news.begin(), news.end(), [&](const Cand& a, const Cand& b) {
-        switch (rootcfg.new_card_gather_priority) {
-            case 1: return a.due != b.due ? a.due < b.due : a.ord < b.ord;  // lowest position
-            case 2: return a.due != b.due ? a.due > b.due : a.ord < b.ord;  // highest position
-            case 3: return day_hash(a.nid, today) < day_hash(b.nid, today);  // random notes
-            case 4: return day_hash(a.cid, today) < day_hash(b.cid, today);  // random cards
-            default: {  // deck order, then position
-                auto na = deck_name(a.did), nb = deck_name(b.did);
-                if (na != nb) return na < nb;
-                return a.due != b.due ? a.due < b.due : a.ord < b.ord;
-            }
-        }
-    });
-    std::vector<Cand> new_taken;
-    for (auto& c : news) {
-        if (bury_new && (seen_notes_new.count(c.nid) || seen_notes_rev.count(c.nid))) continue;
-        if (!take(c.did, true)) continue;
-        new_taken.push_back(c);
-        seen_notes_new.insert(c.nid);
-    }
-    switch (rootcfg.new_card_sort_order) {
-        case 0:  // template, then gather order
-            std::stable_sort(new_taken.begin(), new_taken.end(), [](const Cand& a, const Cand& b) { return a.ord < b.ord; });
-            break;
-        case 2:  // template then random
-            std::sort(new_taken.begin(), new_taken.end(), [&](const Cand& a, const Cand& b) {
-                if (a.ord != b.ord) return a.ord < b.ord;
-                return day_hash(a.cid, today) < day_hash(b.cid, today);
-            });
-            break;
-        case 3:  // random note then template
-            std::sort(new_taken.begin(), new_taken.end(), [&](const Cand& a, const Cand& b) {
-                if (a.nid != b.nid) return day_hash(a.nid, today) < day_hash(b.nid, today);
-                return a.ord < b.ord;
+        case 3:
+            for (auto& c : news) c.hash = fnv_i64s({c.nid, day});
+            std::sort(news.begin(), news.end(), [](const New& a, const New& b) {
+                return a.hash != b.hash ? a.hash < b.hash : a.ord < b.ord;
             });
             break;
         case 4:
-            std::sort(new_taken.begin(), new_taken.end(), [&](const Cand& a, const Cand& b) {
-                return day_hash(a.cid, today) < day_hash(b.cid, today);
-            });
+            for (auto& c : news) c.hash = fnv_i64s({c.id, day});
+            std::sort(news.begin(), news.end(), [](const New& a, const New& b) { return a.hash < b.hash; });
             break;
-        default: break;  // no sort
+        default: break;  // NoSort
     }
-    std::vector<QueuedCard> new_out;
-    for (auto& c : new_taken) new_out.push_back({c.cid, "new"});
-
-    // Interday learning mixed with reviews, then new cards per new_mix.
-    auto intersperse = [](const std::vector<QueuedCard>& a, const std::vector<QueuedCard>& b) {
-        std::vector<QueuedCard> out;
-        if (a.empty()) return b;
-        if (b.empty()) return a;
-        double ratio = (double)(a.size() + 1) / (double)(b.size() + 1);
-        size_t ia = 0, ib = 0;
-        double next_b = ratio;
-        while (ia < a.size() || ib < b.size()) {
-            if (ib < b.size() && (ia >= a.size() || (double)(ia + 1) >= next_b)) {
-                out.push_back(b[ib++]);
-                next_b += ratio;
-            } else {
-                out.push_back(a[ia++]);
-            }
-        }
-        return out;
-    };
-    std::vector<QueuedCard> rev_and_il;
-    switch (rootcfg.interday_learning_mix) {
-        case 1: rev_and_il = rev_out; rev_and_il.insert(rev_and_il.end(), il_out.begin(), il_out.end()); break;
-        case 2: rev_and_il = il_out; rev_and_il.insert(rev_and_il.end(), rev_out.begin(), rev_out.end()); break;
-        default: rev_and_il = intersperse(rev_out, il_out);
-    }
-    std::vector<QueuedCard> all;
-    switch (rootcfg.new_mix) {
-        case 1: all = rev_and_il; all.insert(all.end(), new_out.begin(), new_out.end()); break;
-        case 2: all = new_out; all.insert(all.end(), rev_and_il.begin(), rev_and_il.end()); break;
-        default: all = intersperse(rev_and_il, new_out);
-    }
+    // build()
+    std::vector<LearnEntry> lq;
+    for (auto& c : learning) lq.push_back({c.due, c.id, c.mtime, c.reps});
+    std::stable_sort(lq.begin(), lq.end(), learn_less);
+    learning_.assign(lq.begin(), lq.end());
+    int64_t now = col_.now_secs();
+    int64_t cutoff = now + learn_ahead_secs_;
+    uint32_t learn_count = 0;
+    for (auto& e : learning_)
+        if (e.due <= cutoff) learn_count++;
+    counts_.learn_count = learn_count + (uint32_t)day_learning.size();
+    counts_.review_count = (uint32_t)review.size();
+    counts_.new_count = (uint32_t)news.size();
+    std::vector<MainEntry> rev_m, il_m, new_m;
+    for (auto& c : review) rev_m.push_back({c.id, c.mtime, 1});
+    for (auto& c : day_learning) il_m.push_back({c.id, c.mtime, 2});
+    for (auto& c : news) new_m.push_back({c.id, c.mtime, 0});
+    std::vector<MainEntry> with_il = il_mix == 1   ? chain(rev_m, il_m)
+                                     : il_mix == 2 ? chain(il_m, rev_m)
+                                                   : intersperse(rev_m, il_m);
+    std::vector<MainEntry> all = new_mix == 2   ? chain(new_m, with_il)
+                                 : new_mix == 1 ? chain(with_il, new_m)
+                                                : intersperse(with_il, new_m);
     main_.assign(all.begin(), all.end());
+    learning_cutoff_ = now;
 }
 
-void StudyQueue::sort_learning() {
-    std::sort(learning_.begin(), learning_.end());
+// ---------------------------------------------------------------- CardQueues
+
+std::vector<QueuedCard> StudyQueue::order(size_t limit) const {
+    // intraday_now_iter, main, intraday_ahead_iter
+    std::vector<QueuedCard> out;
+    for (auto& e : learning_)
+        if (e.due <= learning_cutoff_ && out.size() < limit) out.push_back({e.id, "learn"});
+    for (auto& e : main_) {
+        if (out.size() >= limit) break;
+        out.push_back({e.id, e.kind == 0 ? "new" : e.kind == 1 ? "review" : "learn"});
+    }
+    int64_t ahead = learning_cutoff_ + learn_ahead_secs_;
+    for (auto& e : learning_)
+        if (e.due > learning_cutoff_ && e.due <= ahead && out.size() < limit) out.push_back({e.id, "learn"});
+    return out;
 }
 
 std::optional<QueuedCard> StudyQueue::next() {
-    int64_t now = col_.now_secs();
-    if (!learning_.empty() && learning_.front().first <= now) return QueuedCard{learning_.front().second, "learn"};
-    if (!main_.empty()) return main_.front();
-    if (!learning_.empty() && learning_.front().first <= now + learn_ahead_secs_)
-        return QueuedCard{learning_.front().second, "learn"};
-    return std::nullopt;
+    auto o = order(1);
+    if (o.empty()) return std::nullopt;
+    return o[0];
 }
 
 std::optional<QueuedCard> StudyQueue::peek(size_t i) {
-    if (i < learning_.size()) return QueuedCard{learning_[i].second, "learn"};
-    i -= learning_.size();
-    if (i < main_.size()) return main_[i];
+    auto o = order(i + 1);
+    if (i < o.size()) return o[i];
     return std::nullopt;
 }
 
+void StudyQueue::update_learning_cutoff_and_count() {
+    int64_t last_ahead = learning_cutoff_ + learn_ahead_secs_;
+    learning_cutoff_ = col_.now_secs();
+    int64_t new_ahead = learning_cutoff_ + learn_ahead_secs_;
+    for (auto& e : learning_)
+        if (e.due > last_ahead && e.due <= new_ahead) counts_.learn_count++;
+}
+
+void StudyQueue::insert_learning(LearnEntry e) {
+    if (e.due <= learning_cutoff_ + learn_ahead_secs_) counts_.learn_count++;
+    // binary_search_by(cmp_by_reps_then_due): any equal position, else the insertion point
+    size_t lo = 0, hi = learning_.size();
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (learn_less(learning_[mid], e)) lo = mid + 1;
+        else hi = mid;
+    }
+    learning_.insert(learning_.begin() + lo, e);
+}
+
 void StudyQueue::on_answered(const Card& c) {
-    learning_.erase(std::remove_if(learning_.begin(), learning_.end(),
-                                   [&](const auto& p) { return p.second == c.id; }),
-                    learning_.end());
-    main_.erase(std::remove_if(main_.begin(), main_.end(), [&](const QueuedCard& q) { return q.card_id == c.id; }),
-                main_.end());
-    // Drop siblings that were just buried.
-    {
-        Stmt s(col_.db(), "select id from cards where nid = ? and queue = -3");
-        s.bind(1, c.nid);
-        std::set<int64_t> buried;
-        while (s.step()) buried.insert(s.i64(0));
-        if (!buried.empty())
-            main_.erase(std::remove_if(main_.begin(), main_.end(),
-                                       [&](const QueuedCard& q) { return buried.count(q.card_id) > 0; }),
-                        main_.end());
+    // pop_entry
+    auto it = std::find_if(learning_.begin(), learning_.end(), [&](const LearnEntry& e) { return e.id == c.id; });
+    if (it != learning_.end()) {
+        learning_.erase(it);
+        counts_.learn_count = counts_.learn_count ? counts_.learn_count - 1 : 0;
+    } else if (!main_.empty() && main_.front().id == c.id) {
+        int k = main_.front().kind;
+        main_.pop_front();
+        if (k == 0) counts_.new_count--;
+        else if (k == 1) counts_.review_count--;
+        else counts_.learn_count = counts_.learn_count ? counts_.learn_count - 1 : 0;
+    } else {
+        // not where rslib expects it (e.g. after undo): drop it wherever it is
+        main_.erase(std::remove_if(main_.begin(), main_.end(), [&](const MainEntry& e) { return e.id == c.id; }),
+                    main_.end());
     }
-    if (c.queue == Q_LEARN || c.queue == Q_PREVIEW) {
-        SchedTimingToday t = col_.timing_today();
-        if (c.due < t.next_day_at) {
-            learning_.push_back({c.due, c.id});
-            sort_learning();
+    // maybe_requeue_learning_card
+    SchedTimingToday t = col_.timing_today();
+    if ((c.queue == Q_LEARN || c.queue == Q_PREVIEW) && c.due < t.next_day_at) {
+        LearnEntry e{c.due, c.id, c.mtime, c.reps};
+        int64_t cutoff = learning_cutoff_ + learn_ahead_secs_;
+        if (e.due <= cutoff && main_.empty() && !learning_.empty()) {
+            const LearnEntry& next = learning_.front();
+            if (next.due >= e.due && next.due + 1 < cutoff) e.due = next.due + 1;
         }
+        insert_learning(e);
     }
+    update_learning_cutoff_and_count();
 }
 
 void StudyQueue::push_front(const QueuedCard& q) {
-    learning_.erase(std::remove_if(learning_.begin(), learning_.end(),
-                                   [&](const auto& p) { return p.second == q.card_id; }),
-                    learning_.end());
-    main_.erase(std::remove_if(main_.begin(), main_.end(), [&](const QueuedCard& x) { return x.card_id == q.card_id; }),
-                main_.end());
-    main_.push_front(q);
+    auto c = col_.get_card(q.card_id);
+    if (!c) return;
+    on_answered(*c);  // remove it if it was requeued
+    if (c->queue == Q_LEARN || c->queue == Q_PREVIEW) {
+        learning_.push_front({std::min<int64_t>(c->due, learning_cutoff_), c->id, c->mtime, c->reps});
+        counts_.learn_count++;
+    } else {
+        int kind = c->queue == Q_NEW ? 0 : c->queue == Q_REVIEW ? 1 : 2;
+        main_.push_front({c->id, c->mtime, kind});
+        if (kind == 0) counts_.new_count++;
+        else if (kind == 1) counts_.review_count++;
+        else counts_.learn_count++;
+    }
 }
 
-DeckCounts StudyQueue::counts() const {
-    DeckCounts d;
-    d.learn_count = (uint32_t)learning_.size();
-    for (const auto& q : main_) {
-        if (q.kind == "new") d.new_count++;
-        else if (q.kind == "daylearn") d.learn_count++;
-        else d.review_count++;
-    }
-    return d;
+DeckCounts StudyQueue::counts() {
+    if (counts_.new_count == 0 && counts_.learn_count == 0 && counts_.review_count == 0)
+        update_learning_cutoff_and_count();
+    return counts_;
 }
 
 DeckCounts deck_counts(Collection& col, int64_t deck_id) {

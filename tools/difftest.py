@@ -149,7 +149,7 @@ def test_states(src, ncards, workdir):
     return mismatches == 0
 
 
-def test_replay(src, nanswers, workdir):
+def test_replay(src, nanswers, workdir, deck_name=None):
     a_path = os.path.join(workdir, "replay_anki.anki2")
     b_path = os.path.join(workdir, "replay_3ds.anki2")
     snapshot(src, a_path)
@@ -159,7 +159,10 @@ def test_replay(src, nanswers, workdir):
     best = None
     for node in col.sched.deck_due_tree().children:
         due = node.review_count + node.learn_count + node.new_count
-        if best is None or due > best[1]:
+        if deck_name and node.name == deck_name:
+            best = (node.deck_id, due, node.name)
+            break
+        if not deck_name and (best is None or due > best[1]):
             best = (node.deck_id, due, node.name)
     if not best or best[1] == 0:
         print("[replay] nothing due; skipped")
@@ -181,11 +184,20 @@ def test_replay(src, nanswers, workdir):
         col.sched.answer_card(ans)
         log.append((card.id, rating, ans.milliseconds_taken))
     col.close()
-    inp = "\n".join(f"{c} {r} {m}" for c, r, m in log)
-    out = subprocess.run([CLI, "replay", b_path], input=inp, capture_output=True, text=True)
+    # Let the 3DS pick its own cards with its queue, as the app does
+    pat = "".join(str(x) for x in pattern)
+    out = subprocess.run([CLI, "study", b_path, str(best[0]), pat, str(nanswers)], capture_output=True, text=True)
     if out.returncode != 0:
         print(out.stderr)
         return False
+    mine = [tuple(int(x) for x in l.split()) for l in out.stdout.splitlines() if l.strip()]
+    same_order = [c for c, _, _ in mine] == [c for c, _, _ in log]
+    print(f"[replay] 3DS queue picked the same cards in the same order: {same_order}")
+    if not same_order:
+        for i, (a, b) in enumerate(zip(log, mine)):
+            if a[0] != b[0]:
+                print(f"  first difference at answer {i + 1}: anki card {a[0]}, 3ds card {b[0]}")
+                break
     touched = sorted({c for c, _, _ in log})
     qs = ",".join(map(str, touched))
     cols = "id, did, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, data"
@@ -217,7 +229,7 @@ def test_replay(src, nanswers, workdir):
                 if ra.get(cid) != rb.get(cid):
                     print(f"    revlog anki: {ra.get(cid)[-3:]}\n    revlog 3ds : {rb.get(cid)[-3:]}")
     print(f"[replay] {len(log)} answers over {len(touched)} cards: {bad} mismatching")
-    return bad == 0
+    return bad == 0 and same_order
 
 
 def main():
@@ -225,12 +237,13 @@ def main():
     ap.add_argument("collection", nargs="?", default=DEFAULT_COL)
     ap.add_argument("--cards", type=int, default=3000)
     ap.add_argument("--answers", type=int, default=150)
+    ap.add_argument("--deck", default=None, help="top-level deck to study in the replay test")
     args = ap.parse_args()
     if not os.path.exists(CLI):
         sys.exit("build the CLI first: make -f Makefile.host")
     with tempfile.TemporaryDirectory() as tmp:
         ok1 = test_states(args.collection, args.cards, tmp)
-        ok2 = test_replay(args.collection, args.answers, tmp)
+        ok2 = test_replay(args.collection, args.answers, tmp, args.deck)
     print("PASS" if ok1 and ok2 else "FAIL")
     sys.exit(0 if ok1 and ok2 else 1)
 

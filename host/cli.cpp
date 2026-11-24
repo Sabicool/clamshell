@@ -197,6 +197,35 @@ int main(int argc, char** argv) {
         fprintf(stderr, "answered %d\n", n);
         return 0;
     }
+    if (cmd == "study") {
+        // study <col> <deck id> <ratings csv> <n>: picks cards with StudyQueue like the app
+        if (argc < 6) return usage();
+        int64_t did = std::stoll(argv[3]);
+        std::vector<int> pattern;
+        for (char ch : std::string(argv[4]))
+            if (ch >= '1' && ch <= '4') pattern.push_back(ch - '0');
+        int n = atoi(argv[5]);
+        StudyQueue q(col, did);
+        q.build();
+        Scheduler sched(col);
+        sched.start_session(true);
+        for (int i = 0; i < n; i++) {
+            auto next = q.next();
+            if (!next) break;
+            auto card = col.get_card(next->card_id);
+            if (!card) break;
+            int rating = pattern[i % pattern.size()];
+            uint32_t ms = 4000 + 100 * (i % 7);
+            if (!sched.answer(card->id, (Rating)rating, ms, err)) {
+                fprintf(stderr, "answer failed: %s\n", err.c_str());
+                return 1;
+            }
+            record_studied(col, card->did, card->queue == Q_NEW, card->queue == Q_REVIEW || card->queue == Q_DAY_LEARN, ms);
+            if (auto updated = col.get_card(card->id)) q.on_answered(*updated);
+            printf("%lld %d %u\n", (long long)card->id, rating, ms);
+        }
+        return 0;
+    }
     if (cmd == "undotest") {
         // answers the given card ids (cycling Again/Good/Easy/Hard), then undoes them all
         Scheduler sched(col);

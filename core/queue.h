@@ -1,7 +1,6 @@
-// Study queue: decides which card to show next for a deck, honouring the
-// preset's daily limits, learn-ahead, sibling burying and new/review mixing.
-// This follows the v3 scheduler's structure (rslib/src/scheduler/queue) but is
-// a simplified re-implementation; per-card scheduling (states.cpp) is exact.
+// Study queue: which card to show next. A port of rslib/src/scheduler/queue
+// (builder, gathering SQL, sorting, intersperser, learning requeue) and
+// rslib/src/decks/limits.rs, so cards come up in the same order as desktop Anki.
 #pragma once
 #include <deque>
 #include <map>
@@ -19,26 +18,39 @@ struct DeckCounts {
 
 struct QueuedCard {
     int64_t card_id;
-    std::string kind;  // "new", "learn", "review", "daylearn"
+    std::string kind;  // "new", "learn", "review"
 };
 
 class StudyQueue {
 public:
     StudyQueue(Collection& col, int64_t deck_id) : col_(col), deck_id_(deck_id) {}
     void build();
-    std::optional<QueuedCard> next();          // card to show now (learning cards when due)
-    std::optional<QueuedCard> peek(size_t i);  // for debugging: i-th card of the combined order
-    void on_answered(const Card& updated);     // remove/requeue after an answer
-    void push_front(const QueuedCard& q);      // show this card next (used by undo)
-    DeckCounts counts() const;
+    std::optional<QueuedCard> next();          // the card to show now
+    std::optional<QueuedCard> peek(size_t i);  // i-th card in display order
+    void on_answered(const Card& updated);     // pop + requeue learning, like rslib
+    void push_front(const QueuedCard& q);      // show this card next (undo)
+    DeckCounts counts();
+
+    struct LearnEntry {
+        int64_t due, id, mtime;
+        uint32_t reps;
+    };
+    struct MainEntry {
+        int64_t id, mtime;
+        int kind;  // 0 new, 1 review, 2 interday learning
+    };
 
 private:
     Collection& col_;
     int64_t deck_id_;
-    std::deque<QueuedCard> main_;        // reviews, interday learning, new (mixed)
-    std::vector<std::pair<int64_t, int64_t>> learning_;  // (due_secs, cid) intraday
-    uint32_t learn_ahead_secs_ = 1200;
-    void sort_learning();
+    std::deque<MainEntry> main_;
+    std::deque<LearnEntry> learning_;
+    DeckCounts counts_;
+    int64_t learn_ahead_secs_ = 1200;
+    int64_t learning_cutoff_ = 0;
+    std::vector<QueuedCard> order(size_t limit) const;
+    void update_learning_cutoff_and_count();
+    void insert_learning(LearnEntry e);
 };
 
 DeckCounts deck_counts(Collection& col, int64_t deck_id);
