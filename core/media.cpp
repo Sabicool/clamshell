@@ -1,5 +1,6 @@
 #include "media.h"
 
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include <cstdio>
@@ -13,11 +14,6 @@ using json = nlohmann::json;
 namespace anki {
 
 namespace {
-
-bool file_exists(const std::string& path) {
-    struct stat st;
-    return stat(path.c_str(), &st) == 0 && st.st_size > 0;
-}
 
 std::string html_unescape(const std::string& s) {
     std::string out;
@@ -95,9 +91,16 @@ std::vector<std::string> missing_media_for_deck(Collection& col, int64_t deck_id
     std::set<std::string> names;
     Stmt s(col.db(), sql.c_str());
     while (s.step()) scan_field(s.text(0), names);
+    // one directory listing instead of a stat per reference: SD card stats are slow
+    // on the 3DS and Malleus-sized decks reference thousands of images
+    std::set<std::string> present;
+    if (DIR* d = opendir(media_dir.c_str())) {
+        while (dirent* e = readdir(d)) present.insert(e->d_name);
+        closedir(d);
+    }
     std::vector<std::string> out;
     for (auto& n : names)
-        if (!file_exists(media_dir + "/" + n)) out.push_back(n);
+        if (!present.count(n)) out.push_back(n);
     return out;
 }
 
@@ -165,13 +168,21 @@ bool extract_media_zip(const std::string& z, const std::string& media_dir, int& 
         std::string real = it->get<std::string>();
         if (real.find('/') != std::string::npos || real.find('\\') != std::string::npos || real == ".." ) continue;
         std::string path = media_dir + "/" + real;
-        FILE* f = fopen(path.c_str(), "wb");
+        // write then rename, so a half-written file never looks downloaded
+        std::string tmp = media_dir + "/.partial";
+        FILE* f = fopen(tmp.c_str(), "wb");
         if (!f) {
             err = "can't write " + path;
             return false;
         }
-        fwrite(z.data() + e.offset, 1, e.size, f);
-        fclose(f);
+        bool ok = fwrite(z.data() + e.offset, 1, e.size, f) == e.size;
+        ok = fclose(f) == 0 && ok;
+        std::remove(path.c_str());
+        if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) {
+            std::remove(tmp.c_str());
+            err = "can't write " + path + " (SD card full?)";
+            return false;
+        }
         extracted++;
     }
     return true;
