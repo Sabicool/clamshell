@@ -15,6 +15,7 @@
 #endif
 #ifndef ANKI3DS_NO_TEMPLATE
 #include "template.h"
+#include "render/card_view.h"
 #endif
 
 using namespace anki;
@@ -75,6 +76,7 @@ static int usage() {
             "  anki3ds-cli states <collection> [--lb] < card ids (one per line)\n"
             "  anki3ds-cli replay <collection> < lines: cid rating millis\n"
             "  anki3ds-cli render <collection> <card id>\n"
+            "  anki3ds-cli shot <collection> <card id> <out prefix> [media dir] [text zoom]\n"
             "  anki3ds-cli queue <collection> <deck id> [n]\n"
             "  anki3ds-cli sync <collection> <endpoint> <hkey> [--full-download]\n"
             "  anki3ds-cli login <endpoint> <user> <pass>\n");
@@ -92,6 +94,31 @@ int main(int argc, char** argv) {
         auto key = client.login(argv[3], argv[4], err);
         if (!key) { fprintf(stderr, "login failed: %s\n", err.c_str()); return 1; }
         printf("%s\n", key->c_str());
+        return 0;
+    }
+#endif
+#ifndef ANKI3DS_NO_TEMPLATE
+    if (cmd == "htmlshot" && argc >= 4) {
+        // htmlshot <file.html> <out.png> [css file]
+        auto slurp = [](const char* path) {
+            std::string s;
+            FILE* f = fopen(path, "rb");
+            if (!f) return s;
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
+            fclose(f);
+            return s;
+        };
+        FontLib fonts;
+        std::string e;
+        std::string exe = argv[0];
+        fonts.load(exe.substr(0, exe.rfind("/build/")) + "/3ds/romfs/fonts", e);
+        CardView view(fonts);
+        CardViewOptions opt;
+        view.render(slurp(argv[2]), argc > 4 ? slurp(argv[4]) : std::string(), 0, opt);
+        view.canvas().save_png(argv[3]);
+        printf("%d px tall\n", view.content_height());
         return 0;
     }
 #endif
@@ -176,6 +203,28 @@ int main(int argc, char** argv) {
         return 0;
     }
 #ifndef ANKI3DS_NO_TEMPLATE
+    if (cmd == "shot") {
+        if (argc < 5) return usage();
+        auto card = col.get_card(std::stoll(argv[3]));
+        if (!card) { fprintf(stderr, "no such card\n"); return 1; }
+        RenderedCard r = render_card(col, *card);
+        FontLib fonts;
+        std::string exe = argv[0];
+        std::string root = exe.substr(0, exe.rfind("/build/"));
+        if (!fonts.load(root + "/3ds/romfs/fonts", err)) { fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        CardViewOptions opt;
+        if (argc > 5) opt.media_dir = argv[5];
+        if (argc > 6) opt.text_zoom = (float)atof(argv[6]);
+        CardView view(fonts);
+        std::string prefix = argv[4];
+        view.render(r.question, r.css, r.ord, opt);
+        view.canvas().save_png(prefix + "-q.png");
+        printf("question: %d px tall\n", view.content_height());
+        view.render(r.answer, r.css, r.ord, opt);
+        view.canvas().save_png(prefix + "-a.png");
+        printf("answer: %d px tall (answer anchor at %d)\n", view.content_height(), view.answer_anchor());
+        return 0;
+    }
     if (cmd == "render") {
         if (argc < 4) return usage();
         auto card = col.get_card(std::stoll(argv[3]));

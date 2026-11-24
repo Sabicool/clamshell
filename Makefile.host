@@ -6,20 +6,34 @@ CC ?= clang
 BUILD := build/host
 # -ffp-contract=off: never fuse float multiply-adds; Rust doesn't, and the
 # scheduler must round exactly like desktop Anki.
-CXXFLAGS := -std=c++17 -O2 -g -ffp-contract=off -Wall -Wno-unused-function \
-	-Icore -Ithird_party -Ithird_party/sqlite -Ithird_party/zstd
+INCLUDES := -Icore -Icore/render -Ithird_party -Ithird_party/sqlite -Ithird_party/zstd \
+	-Ithird_party/litehtml/include -Ithird_party/litehtml/include/litehtml \
+	-Ithird_party/litehtml/src/gumbo/include -Ithird_party/litehtml/src/gumbo/include/gumbo
+CXXFLAGS := -std=c++17 -O2 -g -ffp-contract=off -Wall -Wno-unused-function $(INCLUDES)
 CFLAGS := -O2 -ffp-contract=off -DSQLITE_OMIT_LOAD_EXTENSION -Ithird_party/zstd
 
-CORE_SRC := $(wildcard core/*.cpp)
+CORE_SRC := $(wildcard core/*.cpp core/render/*.cpp)
 CORE_OBJ := $(patsubst core/%.cpp,$(BUILD)/core/%.o,$(CORE_SRC))
+LH_SRC := $(wildcard third_party/litehtml/src/*.cpp)
+LH_OBJ := $(patsubst third_party/litehtml/src/%.cpp,$(BUILD)/litehtml/%.o,$(LH_SRC))
+GUMBO_SRC := $(wildcard third_party/litehtml/src/gumbo/*.c)
+GUMBO_OBJ := $(patsubst third_party/litehtml/src/gumbo/%.c,$(BUILD)/gumbo/%.o,$(GUMBO_SRC))
 ZSTD_SRC := $(wildcard third_party/zstd/common/*.c third_party/zstd/compress/*.c third_party/zstd/decompress/*.c)
 ZSTD_OBJ := $(patsubst third_party/zstd/%.c,$(BUILD)/zstd/%.o,$(ZSTD_SRC))
 
 all: $(BUILD)/anki3ds-cli
 
-$(BUILD)/core/%.o: core/%.cpp $(wildcard core/*.h)
+$(BUILD)/core/%.o: core/%.cpp $(wildcard core/*.h core/render/*.h)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/litehtml/%.o: third_party/litehtml/src/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -w -c $< -o $@
+
+$(BUILD)/gumbo/%.o: third_party/litehtml/src/gumbo/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Ithird_party/litehtml/src/gumbo/include -Ithird_party/litehtml/src/gumbo/include/gumbo -w -c $< -o $@
 
 $(BUILD)/zstd/%.o: third_party/zstd/%.c
 	@mkdir -p $(dir $@)
@@ -33,7 +47,7 @@ $(BUILD)/host/%.o: host/%.cpp $(wildcard core/*.h)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/anki3ds-cli: $(CORE_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_curl.o
+$(BUILD)/anki3ds-cli: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_curl.o
 	$(CXX) $^ -lcurl -o $@
 
 test: all
