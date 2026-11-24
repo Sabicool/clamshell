@@ -26,7 +26,7 @@ shot 01-setup
 type {ENDPOINT}
 type test
 type test
-key X
+key A
 shot 02-decks
 select Malleus Clinical Medicine
 shot 03-deck-selected

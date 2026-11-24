@@ -6,3 +6,4 @@ tools/.venv/
 *.smdh
 *.elf
 .DS_Store
+server-data/

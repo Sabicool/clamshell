@@ -98,7 +98,7 @@ void App::configure_clock() {
 void App::open_collection() {
     std::string err;
     if (!col_.open(col_path_, err)) {
-        show_message("Couldn't open your collection", err + "\n\nYou can download it again from AnkiWeb in Settings.",
+        show_message("Couldn't open your collection", err + "\n\nYou can download it again from your sync server in Settings.",
                      Mode::Settings);
         return;
     }
@@ -243,36 +243,37 @@ void App::progress(const std::string& title, const std::string& detail) {
 // ---------------------------------------------------------------- setup
 
 void App::on_setup(const Input& in) {
-    Button signin{{20, 60, 280, 50}, "Sign in to AnkiWeb", "", "A"};
-    Button custom{{20, 125, 280, 40}, "Use a self-hosted sync server", "", "X"};
-    if ((in.down & K_A) || (in.touch_down && hit(signin.r, in.tx, in.ty))) login_flow(false);
-    else if ((in.down & K_X) || (in.touch_down && hit(custom.r, in.tx, in.ty))) login_flow(true);
-    else if (in.down & K_START) {
-        // nothing to quit to cleanly from here besides HOME; START does nothing
-    }
+    Button own{{20, 50, 280, 56}, "Sign in to my sync server", "", "A"};
+    Button web{{20, 140, 280, 40}, "Sign in to AnkiWeb", "", "X"};
+    if ((in.down & K_A) || (in.touch_down && hit(own.r, in.tx, in.ty))) login_flow(true);
+    else if ((in.down & K_X) || (in.touch_down && hit(web.r, in.tx, in.ty))) login_flow(false);
 }
 
 void App::draw_setup() {
     const Theme& t = theme(settings_.night);
     top.resize(400, 240, t.bg);
-    text_centered(top, fonts_, {0, 40, 400, 40}, "Anki for 3DS", 30, t.text, FACE_SANS_BOLD);
-    float y = paragraph(top, fonts_, 30, 100, 340,
-                        "Sign in with your AnkiWeb account to download your collection. Reviews you do here sync "
-                        "back to AnkiWeb, using exactly the same scheduling as Anki on your other devices.",
+    text_centered(top, fonts_, {0, 28, 400, 40}, "Anki for 3DS", 30, t.text, FACE_SANS_BOLD);
+    float y = paragraph(top, fonts_, 30, 86, 340,
+                        "Sign in to an Anki sync server to download your collection. Reviews you do here sync "
+                        "back, using exactly the same scheduling as Anki on your other devices.",
                         15, t.text);
-    paragraph(top, fonts_, 30, y + 10, 340,
-              "This 3DS never uploads a whole collection, so it can't overwrite AnkiWeb.", 13, t.dim);
+    paragraph(top, fonts_, 30, y + 8, 340,
+              "AnkiWeb's terms currently only allow Anki's own apps, so a self-hosted sync server (built into "
+              "Anki) is the supported option. This 3DS never uploads a whole collection.",
+              13, t.dim);
     bottom.resize(320, 240, t.bg);
-    button(bottom, fonts_, {{20, 60, 280, 50}, "Sign in to AnkiWeb", "", "A"}, settings_.night);
-    button(bottom, fonts_, {{20, 125, 280, 40}, "Use a self-hosted sync server", "", "X", t.dim}, settings_.night);
-    text_centered(bottom, fonts_, {0, 200, 320, 20}, "Press HOME to exit", 12, t.dim);
+    button(bottom, fonts_, {{20, 50, 280, 56}, "Sign in to my sync server", "", "A"}, settings_.night);
+    text_centered(bottom, fonts_, {20, 108, 280, 20}, "e.g. http://192.168.1.20:8080/", 12, t.dim);
+    button(bottom, fonts_, {{20, 140, 280, 40}, "Sign in to AnkiWeb", "", "X", t.hard}, settings_.night);
+    text_centered(bottom, fonts_, {20, 182, 280, 20}, "Only with permission from AnkiWeb", 12, t.dim);
+    text_centered(bottom, fonts_, {0, 214, 320, 20}, "Press HOME to exit", 12, t.dim);
 }
 
 void App::login_flow(bool custom_server) {
     std::string endpoint = settings_.endpoint;
     if (custom_server) {
         std::string url;
-        if (!pf_.keyboard("Sync server URL (e.g. http://192.168.1.5:8080/)",
+        if (!pf_.keyboard("Sync server URL (e.g. http://192.168.1.20:8080/)",
                           endpoint == "https://sync.ankiweb.net/" ? "http://" : endpoint, false, url))
             return;
         endpoint = url;
@@ -312,7 +313,7 @@ void App::login_flow(bool custom_server) {
 
 void App::sync_flow() {
     if (settings_.hkey.empty()) {
-        show_message("Not signed in", "Sign in to AnkiWeb from Settings first.", Mode::Decks);
+        show_message("Not signed in", "Sign in to your sync server from Settings first.", Mode::Decks);
         return;
     }
     std::string err;
@@ -339,7 +340,7 @@ void App::sync_flow() {
             gmtime_r(&now, &tmv);
             strftime(buf, sizeof buf, "%H:%M", &tmv);
             status_ = std::string(r.status == SyncStatus::Synced ? "Synced" : "Already up to date") + " at " + buf;
-            if (!r.message.empty()) show_message("Message from AnkiWeb", r.message, Mode::Decks);
+            if (!r.message.empty()) show_message("Message from the sync server", r.message, Mode::Decks);
             else mode_ = Mode::Decks;
             build_rows();
             break;
@@ -349,8 +350,7 @@ void App::sync_flow() {
                 mode_ = Mode::ConfirmDownload;
             } else {
                 show_message("Can't sync",
-                             "AnkiWeb has an empty collection. Upload your collection from desktop Anki first.",
-                             Mode::Decks);
+                             "The server's collection is empty. Sync from desktop Anki first.", Mode::Decks);
             }
             break;
         default:
@@ -387,7 +387,7 @@ void App::full_download_flow() {
         return;
     }
     open_collection();
-    status_ = "Downloaded from AnkiWeb";
+    status_ = "Downloaded from the sync server";
     dirty = true;
 }
 
@@ -415,7 +415,7 @@ void App::media_flow(int64_t deck_id, bool quiet) {
     else if (!quiet || res.unavailable)
         show_message("Images",
                      "Downloaded " + std::to_string(res.downloaded) + " files." +
-                         (res.unavailable ? " " + std::to_string(res.unavailable) + " are missing on AnkiWeb." : ""),
+                         (res.unavailable ? " " + std::to_string(res.unavailable) + " are missing on the server." : ""),
                      Mode::Decks);
 }
 
@@ -707,8 +707,8 @@ void App::draw_done() {
 // ---------------------------------------------------------------- settings
 
 static const char* SETTING_NAMES[] = {"Text size",          "Night mode",        "Time zone",
-                                      "Download images automatically", "Sign in / change account",
-                                      "Replace this 3DS copy with AnkiWeb's", "About"};
+                                      "Download images automatically", "Sign in again",
+                                      "Replace this 3DS copy with the server's", "About"};
 static const int SETTING_COUNT = 7;
 
 void App::on_settings(const Input& in) {
@@ -740,7 +740,7 @@ void App::on_settings(const Input& in) {
             if (delta || activate) settings_.auto_media = !settings_.auto_media;
             break;
         case 4:
-            if (activate) login_flow(false);
+            if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
             break;
         case 5:
             if (activate) {
@@ -788,13 +788,13 @@ void App::draw_settings() {
         case 1: help = "Dark background for cards and menus."; break;
         case 2:
             help = "The 3DS clock has no time zone. Set your offset from UTC so the day rolls over at the same "
-                   "time as on your other devices, and so AnkiWeb accepts the sync (it must be within 5 minutes).";
+                   "time as on your other devices, and so the server accepts the sync (clocks must agree within 5 minutes).";
             break;
         case 3: help = "When you open a deck, fetch any of its images that aren't on the SD card yet."; break;
-        case 4: help = "Sign in again, e.g. after changing your AnkiWeb password."; break;
+        case 4: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
         case 5:
-            help = "Downloads the whole collection from AnkiWeb again. Reviews on this 3DS that haven't been "
-                   "synced will be lost.";
+            help = "Downloads the whole collection from the sync server again. Reviews on this 3DS that haven't "
+                   "been synced will be lost.";
             break;
         default: help = "Version 0.1.0 (first draft)."; break;
     }
@@ -827,12 +827,12 @@ void App::draw() {
             top.resize(400, 240, t.bg);
             text_centered(top, fonts_, {0, 30, 400, 30}, "Full download needed", 20, t.text, FACE_SANS_BOLD);
             paragraph(top, fonts_, 30, 75, 340,
-                      "AnkiWeb's collection changed in a way that can't be merged (for example a note type was "
-                      "edited on desktop). Download AnkiWeb's copy to replace the one on this 3DS?\n\nReviews done "
-                      "on this 3DS since the last successful sync will be lost.",
+                      "The server's collection changed in a way that can't be merged (for example a note type was "
+                      "edited on desktop). Download the server's copy to replace the one on this 3DS?\n\nReviews "
+                      "done on this 3DS since the last successful sync will be lost.",
                       14, t.text);
             bottom.resize(320, 240, t.bg);
-            button(bottom, fonts_, {{20, 60, 280, 50}, "Download from AnkiWeb", "", "A", t.again}, settings_.night);
+            button(bottom, fonts_, {{20, 60, 280, 50}, "Download from server", "", "A", t.again}, settings_.night);
             button(bottom, fonts_, {{20, 125, 280, 40}, "Not now", "", "B", t.hard}, settings_.night);
             break;
         }
