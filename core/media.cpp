@@ -82,12 +82,34 @@ uint16_t rd16(const std::string& z, size_t o) { return (uint16_t)((uint8_t)z[o] 
 
 }  // namespace
 
+namespace {
+std::string id_list(const std::vector<int64_t>& v) {
+    std::string out;
+    for (size_t i = 0; i < v.size(); i++) out += (i ? "," : "") + std::to_string(v[i]);
+    return out;
+}
+
+std::vector<std::string> missing_in_notes(Collection& col, const std::string& sql, const std::string& media_dir);
+}  // namespace
+
 std::vector<std::string> missing_media_for_deck(Collection& col, int64_t deck_id, const std::string& media_dir) {
-    std::vector<int64_t> dids = col.child_deck_ids(deck_id);
-    std::string ids;
-    for (size_t i = 0; i < dids.size(); i++) ids += (i ? "," : "") + std::to_string(dids[i]);
-    std::string sql = "select flds from notes where id in (select nid from cards where did in (" + ids +
-                      ") or odid in (" + ids + "))";
+    std::string ids = id_list(col.child_deck_ids(deck_id));
+    return missing_in_notes(col,
+                            "select flds from notes where id in (select nid from cards where did in (" + ids +
+                                ") or odid in (" + ids + "))",
+                            media_dir);
+}
+
+std::vector<std::string> missing_media_for_cards(Collection& col, const std::vector<int64_t>& card_ids,
+                                                 const std::string& media_dir) {
+    if (card_ids.empty()) return {};
+    return missing_in_notes(
+        col, "select flds from notes where id in (select nid from cards where id in (" + id_list(card_ids) + "))",
+        media_dir);
+}
+
+namespace {
+std::vector<std::string> missing_in_notes(Collection& col, const std::string& sql, const std::string& media_dir) {
     std::set<std::string> names;
     Stmt s(col.db(), sql.c_str());
     while (s.step()) scan_field(s.text(0), names);
@@ -103,6 +125,7 @@ std::vector<std::string> missing_media_for_deck(Collection& col, int64_t deck_id
         if (!present.count(n)) out.push_back(n);
     return out;
 }
+}  // namespace
 
 bool extract_media_zip(const std::string& z, const std::string& media_dir, int& extracted, std::string& err) {
     extracted = 0;

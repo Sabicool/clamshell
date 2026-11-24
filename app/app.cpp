@@ -420,6 +420,11 @@ void App::media_flow(int64_t deck_id, bool quiet) {
         if (!quiet) show_message("Images", "All images for this deck are already on the SD card.", Mode::Decks);
         return;
     }
+    fetch_media(names, quiet);
+}
+
+// quiet: fetching before a study session; never interrupt it with a message
+void App::fetch_media(const std::vector<std::string>& names, bool quiet) {
     std::string err;
     progress("Downloading images…", std::to_string(names.size()) + " files");
     if (!pf_.net_up(err)) {
@@ -433,8 +438,9 @@ void App::media_flow(int64_t deck_id, bool quiet) {
         progress("Downloading images…", std::to_string(done) + " of " + std::to_string(total));
     });
     pf_.net_down();
+    if (quiet) return;  // study anyway; missing images just don't show
     if (!ok) show_message("Image download stopped", err, Mode::Decks);
-    else if (!quiet || res.unavailable)
+    else
         show_message("Images",
                      "Downloaded " + std::to_string(res.downloaded) + " files." +
                          (res.unavailable ? " " + std::to_string(res.unavailable) + " are missing on the server." : ""),
@@ -546,18 +552,42 @@ void App::draw_decks() {
 
 // ---------------------------------------------------------------- review
 
+// Self-test builds record how long each loading step takes, in timing.txt
+#ifdef ANKI3DS_SELFTEST
+#define STEP_TIME(label)                                                                           \
+    do {                                                                                           \
+        int64_t now_ = pf_.local_clock_ms();                                                       \
+        if (FILE* f_ = fopen((pf_.data_dir() + "/timing.txt").c_str(), "ab")) {                   \
+            fprintf(f_, "%s %lld ms\n", label, (long long)(now_ - step_t_));                         \
+            fclose(f_);                                                                            \
+        }                                                                                          \
+        step_t_ = pf_.local_clock_ms();                                                            \
+    } while (0)
+static int64_t step_t_ = 0;
+#else
+#define STEP_TIME(label) ((void)0)
+#endif
+
 void App::start_review(int64_t deck_id) {
+#ifdef ANKI3DS_SELFTEST
+    step_t_ = pf_.local_clock_ms();
+#endif
     deck_id_ = deck_id;
-    if (settings_.auto_media && !settings_.hkey.empty()) {
-        auto missing = missing_media_for_deck(col_, deck_id, media_dir_);
-        if (!missing.empty() && missing.size() <= 400) media_flow(deck_id, true);
-        if (mode_ == Mode::Message) return;
-    }
     progress("Loading…", "Building today's queue");
     queue_ = std::make_unique<StudyQueue>(col_, deck_id);
     queue_->build();
+    STEP_TIME("queue build");
+    // fetch images for today's cards only (works the same for filtered decks);
+    // Y on the deck list fetches a whole deck
+    if (settings_.auto_media && !settings_.hkey.empty()) {
+        auto missing = missing_media_for_cards(col_, queue_->card_ids(), media_dir_);
+        STEP_TIME("image check");
+        if (!missing.empty()) fetch_media(missing, true);
+        STEP_TIME("image download");
+    }
     sched_ = std::make_unique<Scheduler>(col_);
     sched_->start_session(true);
+    STEP_TIME("scheduler start");
     reviewed_ = 0;
     next_card();
 }
@@ -570,6 +600,9 @@ void App::next_card() {
         dirty = true;
         return;
     }
+#ifdef ANKI3DS_SELFTEST
+    step_t_ = pf_.local_clock_ms();
+#endif
     card_ = col_.get_card(queued_->card_id);
     if (!card_) {
         queue_->build();
@@ -581,7 +614,9 @@ void App::next_card() {
     }
     states_ = sched_->scheduling_states(*card_);
     labels_ = sched_->describe_next_states(states_);
+    STEP_TIME("  next states");
     rendered_ = render_card(col_, *card_);
+    STEP_TIME("  template");
     answer_shown_ = false;
     script_.reset();
     if (settings_.run_scripts) {
@@ -590,7 +625,9 @@ void App::next_card() {
     } else {
         current_html_ = rendered_.question;
     }
+    STEP_TIME("  card script");
     render_current();
+    STEP_TIME("  layout+draw");
     scroll_ = 0;
     shown_at_ms_ = pf_.local_clock_ms();
     mode_ = Mode::Review;

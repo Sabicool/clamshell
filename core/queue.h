@@ -30,6 +30,7 @@ public:
     void on_answered(const Card& updated);     // pop + requeue learning, like rslib
     void push_front(const QueuedCard& q);      // show this card next (undo)
     DeckCounts counts();
+    std::vector<int64_t> card_ids() const;     // every card in today's queue
 
     struct LearnEntry {
         int64_t due, id, mtime;

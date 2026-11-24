@@ -641,3 +641,12 @@ void record_studied(Collection& col, int64_t deck_id, bool was_new, bool was_rev
 }
 
 }  // namespace anki
+
+namespace anki {
+std::vector<int64_t> StudyQueue::card_ids() const {
+    std::vector<int64_t> out;
+    for (auto& e : main_) out.push_back(e.id);
+    for (auto& e : learning_) out.push_back(e.id);
+    return out;
+}
+}  // namespace anki

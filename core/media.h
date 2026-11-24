@@ -15,6 +15,10 @@ namespace anki {
 // that are not yet present in `media_dir`.
 std::vector<std::string> missing_media_for_deck(Collection& col, int64_t deck_id, const std::string& media_dir);
 
+// Same, for the notes of the given cards (e.g. today's study queue).
+std::vector<std::string> missing_media_for_cards(Collection& col, const std::vector<int64_t>& card_ids,
+                                                 const std::string& media_dir);
+
 struct MediaDownloadResult {
     int downloaded = 0;
     int requested = 0;

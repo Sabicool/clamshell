@@ -14,7 +14,7 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 - **The app's screens and flows** run in a desktop simulator (`tools/uitest.py`): sign in, download, deck list, study, answer, sync, settings. Screenshots go to `build/ui-shots/`.
 - **The 3DS network code** (`3ds/source/http_3ds.cpp`: sockets, mbedTLS, chunked downloads) was compiled for the Mac with a small shim and passed the same sync test, including the 76 MB collection download. Its TLS accepts valid certificates and rejects expired or wrong-host ones.
 - The 3DS build (`make -C 3ds`) compiles and links with devkitARM r68.
-- **The real 3DS build runs in the Azahar emulator** (`tools/emutest.py`): it signs in to a local sync server, downloads a copy of a 17,000-card collection (76 MB), opens Malleus, renders and answers four cards, syncs, and the four reviews arrive on desktop. Screenshots come from the emulated framebuffer into `build/emu-shots/`. In the emulator, answering a card takes about 0.5–1 s, opening Malleus about 12 s (mostly checking which images are missing) and a sync about 4 s. Emulator timing is only a rough guide to hardware.
+- **The real 3DS build runs in the Azahar emulator** (`tools/emutest.py`): it signs in to a local sync server, downloads a copy of a 17,000-card collection (76 MB), opens Malleus, renders and answers four cards, syncs, and the four reviews arrive on desktop. Screenshots come from the emulated framebuffer into `build/emu-shots/`. In the emulator, showing a card takes about 0.6 s, opening Malleus about 1 s (plus a one-off download of the images for that day's cards) and a sync about 4 s. Emulator timing is only a rough guide to hardware.
 
 ## Important: AnkiWeb
 

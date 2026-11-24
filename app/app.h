@@ -148,6 +148,7 @@ private:
     void sync_flow();
     void full_download_flow();
     void media_flow(int64_t deck_id, bool quiet);
+    void fetch_media(const std::vector<std::string>& names, bool quiet);
     void start_review(int64_t deck_id);
     void next_card();
     void show_answer();

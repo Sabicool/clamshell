@@ -42,6 +42,8 @@ key A
 shot 04-question
 key A
 shot 05-answer
+key ZR
+shot 05b-extra
 key A
 shot 06-next-question
 key A
@@ -85,8 +87,11 @@ def main():
             src_media = os.path.join(os.path.dirname(src), "collection.media")
             if os.path.isdir(src_media):
                 names = set()
+                # images for everything due today, plus some new cards, as a real server would have
+                today = desk.sched.today
                 for (flds,) in desk.db.execute(
-                        "select flds from notes where id in (select nid from cards where queue in (2,3) and due <= 3000) limit 300"):
+                        "select flds from notes where id in (select nid from cards where queue in (1,3)"
+                        f" or (queue = 2 and due <= {today}) or (queue = 0 and due < 2000))"):
                     names.update(re.findall(r'src="([^"/]+)"', flds))
                 for n in names:
                     p = os.path.join(src_media, n)
@@ -128,7 +133,7 @@ def main():
             time.sleep(2)
             subprocess.run(["pkill", "-f", "Azahar.app/Contents/MacOS/azahar"])
             for f in os.listdir(sd):
-                if f.startswith("shot-") or f in ("selftest.log", "log.txt", "settings.json"):
+                if f.startswith("shot-") or f in ("selftest.log", "log.txt", "settings.json", "timing.txt"):
                     shutil.copy(os.path.join(sd, f), os.path.join(SHOTS, f))
             # did the 3DS reviews reach the server?
             desk.sync_collection(auth, False)
