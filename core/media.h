@@ -18,6 +18,7 @@ std::vector<std::string> missing_media_for_deck(Collection& col, int64_t deck_id
 struct MediaDownloadResult {
     int downloaded = 0;
     int requested = 0;
+    int unavailable = 0;  // referenced by notes but not on the server
 };
 
 // Downloads `names` in batches of 25 into media_dir. `progress(done, total)`.

@@ -245,7 +245,8 @@ int main(int argc, char** argv) {
         auto names = missing_media_for_deck(col, std::stoll(argv[5]), argv[6]);
         MediaDownloadResult res;
         bool ok = download_media(client, names, argv[6], res, err);
-        printf("missing %zu, downloaded %d%s%s\n", names.size(), res.downloaded, ok ? "" : ", error: ", err.c_str());
+        printf("missing %zu, downloaded %d, not on server %d%s%s\n", names.size(), res.downloaded, res.unavailable,
+               ok ? "" : ", error: ", err.c_str());
         return ok ? 0 : 1;
     }
     if (cmd == "sync") {

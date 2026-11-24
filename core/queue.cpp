@@ -342,6 +342,57 @@ DeckCounts deck_counts(Collection& col, int64_t deck_id) {
     return q.counts();
 }
 
+std::map<int64_t, DeckCounts> all_deck_counts(Collection& col) {
+    SchedTimingToday t = col.timing_today();
+    int64_t learn_cutoff = t.now + col.config_int("collapseTime", 1200);
+    std::map<int64_t, DeckCounts> raw;
+    {
+        Stmt s(col.db(),
+               "select did, queue, count() from cards where (queue = 0) or (queue in (2, 3) and due <= ?1) "
+               "or (queue in (1, 4) and due < ?2) group by did, queue");
+        s.bind(1, (int64_t)t.days_elapsed).bind(2, learn_cutoff);
+        while (s.step()) {
+            DeckCounts& d = raw[s.i64(0)];
+            int q = (int)s.i64(1);
+            uint32_t n = (uint32_t)s.i64(2);
+            if (q == 0) d.new_count += n;
+            else if (q == 2) d.review_count += n;
+            else d.learn_count += n;
+        }
+    }
+    // children first: sort deck ids by name depth, deepest first
+    std::vector<const Deck*> order;
+    for (auto& [id, d] : col.decks) order.push_back(&d);
+    auto depth = [](const Deck* d) { return std::count(d->name.begin(), d->name.end(), '\x1f'); };
+    std::sort(order.begin(), order.end(), [&](const Deck* a, const Deck* b) { return depth(a) > depth(b); });
+    std::map<std::string, int64_t> by_name;
+    for (auto& [id, d] : col.decks) by_name[d.name] = id;
+    std::map<int64_t, DeckCounts> out;
+    for (const Deck* d : order) {
+        DeckCounts c = raw[d->id];
+        DeckCounts& acc = out[d->id];
+        acc.new_count += c.new_count;
+        acc.review_count += c.review_count;
+        acc.learn_count += c.learn_count;
+        if (!d->filtered) {
+            Limit l = deck_limit(col, *d, t.days_elapsed);
+            acc.new_count = (uint32_t)std::min<int64_t>(acc.new_count, l.new_left);
+            acc.review_count = (uint32_t)std::min<int64_t>(acc.review_count, l.review_left);
+        }
+        size_t p = d->name.rfind('\x1f');
+        if (p != std::string::npos) {
+            auto it = by_name.find(d->name.substr(0, p));
+            if (it != by_name.end()) {
+                DeckCounts& parent = out[it->second];
+                parent.new_count += acc.new_count;
+                parent.review_count += acc.review_count;
+                parent.learn_count += acc.learn_count;
+            }
+        }
+    }
+    return out;
+}
+
 void record_studied(Collection& col, int64_t deck_id, bool was_new, bool was_review, uint32_t millis) {
     uint32_t today = col.timing_today().days_elapsed;
     std::vector<int64_t> ids{deck_id};

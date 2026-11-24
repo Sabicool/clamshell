@@ -148,7 +148,7 @@ def main():
             if os.path.isdir(src_media):
                 db = sqlite3.connect(ds_path)
                 did = db.execute("select did from cards c join notes n on n.id = c.nid where n.flds like '%<img%' "
-                                 "group by did order by count() desc limit 1").fetchone()[0]
+                                 "group by did having count() < 60 order by count() desc limit 1").fetchone()[0]
                 flds = [r[0] for r in db.execute(f"select flds from notes where id in (select nid from cards where did = {did})")]
                 db.close()
                 import re as _re

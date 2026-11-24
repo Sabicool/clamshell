@@ -189,10 +189,31 @@ bool download_media(SyncClient& client, const std::vector<std::string>& names, c
         json files = json::array();
         for (size_t j = i; j < names.size() && j < i + 25; j++) files.push_back(names[j]);
         json req = {{"files", files}};
-        if (!client.request_path("msync/downloadFiles", req.dump(), out, err)) return false;
-        int n = 0;
-        if (!extract_media_zip(out, media_dir, n, err)) return false;
-        result.downloaded += n;
+        int status = 0;
+        if (client.request_path("msync/downloadFiles", req.dump(), out, err, &status)) {
+            int n = 0;
+            if (!extract_media_zip(out, media_dir, n, err)) return false;
+            result.downloaded += n;
+        } else if (status >= 400 && status < 500) {
+            // Some file in the batch isn't on the server: fetch one at a time, skipping missing ones.
+            err.clear();
+            for (auto& name : files) {
+                json one = {{"files", json::array({name})}};
+                int st = 0;
+                if (client.request_path("msync/downloadFiles", one.dump(), out, err, &st)) {
+                    int n = 0;
+                    if (!extract_media_zip(out, media_dir, n, err)) return false;
+                    result.downloaded += n;
+                } else if (st >= 400 && st < 500) {
+                    result.unavailable++;
+                    err.clear();
+                } else {
+                    return false;
+                }
+            }
+        } else {
+            return false;
+        }
         if (progress) progress((int)std::min(names.size(), i + 25), (int)names.size());
     }
     return true;

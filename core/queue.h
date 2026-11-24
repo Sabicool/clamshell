@@ -4,6 +4,7 @@
 // a simplified re-implementation; per-card scheduling (states.cpp) is exact.
 #pragma once
 #include <deque>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -40,6 +41,10 @@ private:
 };
 
 DeckCounts deck_counts(Collection& col, int64_t deck_id);
+
+// Counts for every deck at once (one query), applying each deck's daily
+// limits bottom-up like the deck list on desktop. Cheap enough for the 3DS.
+std::map<int64_t, DeckCounts> all_deck_counts(Collection& col);
 
 // Bumps the deck's "studied today" counters locally (not synced; see README).
 void record_studied(Collection& col, int64_t deck_id, bool was_new, bool was_review, uint32_t millis);
