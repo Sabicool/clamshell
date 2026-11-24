@@ -7,7 +7,7 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 ## Verified on the Mac
 
 - **Scheduling matches desktop Anki exactly.** `tools/difftest.py` compares this code with the official `anki` 26.08 Python package (the same Rust engine as desktop). On a copy of a real 17,000-card FSRS collection, all 9,335 active cards produce identical next states (intervals, stability, difficulty, steps), with fuzz on. Studying every due card in the Malleus deck (65 answers, load balancer on) produced identical card rows and review-log rows.
-- **Sync round trip.** `tools/synctest.py` runs Anki's own sync server locally: desktop uploads, the 3DS client downloads, both sides study and edit, both sync. Afterwards all cards, notes and review-log rows are identical on both sides and the 3DS file passes SQLite's integrity check. Per-deck image download is checked byte for byte.
+- **Sync round trip.** `tools/synctest.py` runs Anki's own sync server locally: desktop uploads, the 3DS client downloads, both sides study and edit, both sync. Afterwards all cards, notes, review-log rows and decks are identical on both sides (decks differ from before only in their studied-today counters, so daily limits carry across devices), and the 3DS file passes SQLite's integrity check. Per-deck image download is checked byte for byte.
 - **Deck counts** (new/learning/due) match desktop for all 432 decks in the test collection.
 - **Card rendering**: `anki3ds-cli shot` renders cards to PNG with the same code the 3DS uses. Malleus cloze cards, tables, images, Image Occlusion Enhanced and Anki's built-in Image Occlusion render correctly.
 - **Card scripts**: Malleus's template JavaScript runs under QuickJS; one-by-one cloze cards reveal line by line with ▶ and hide with ◀, as on desktop.
@@ -59,7 +59,6 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 
 - **JavaScript runs, but there's no pointer.** Scripts run under QuickJS against a small DOM (elements, classes, styles, events, timers, sessionStorage), and ◀ ▶ reach a card's keyboard shortcuts. The card is on the top screen, which isn't touch-sensitive, so buttons inside cards can't be clicked and are hidden; *Show extra sections* opens the sections Malleus and AnKing hide behind buttons. Scripts can be turned off in Settings.
 - **No audio and no typed answers** yet. Undo keeps the last 30 answers of the current session.
-- **"Studied today" counts stay on the 3DS.** Daily new/review limits are tracked locally but aren't sent to the server, so desktop may offer more new cards that day than your limit.
 - **The study order is a re-implementation** of Anki's queue builder. Counts match desktop exactly; the exact order in which cards appear may differ slightly. Each answer is still scheduled exactly as desktop would.
 - **Cards that have never had FSRS memory states computed** (rare; usually suspended cards from before FSRS was turned on) show an error when answered. Opening the deck options on desktop and saving recomputes them.
 - **Filtered decks** work for rescheduling decks; preview decks are untested.

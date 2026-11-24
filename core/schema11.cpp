@@ -420,6 +420,70 @@ bool merge_deck_config_json(Collection& col, const json& c, std::string& err) {
     return true;
 }
 
+// From<Deck> for DeckSchema11 (rslib/src/decks/schema11.rs)
+json deck_to_json(const Deck& d, int usn) {
+    static const std::set<std::string> RESERVED = {
+        "usn", "revToday", "newLimit", "dyn", "reviewLimit", "newToday", "timeToday", "reviewLimitToday", "extendNew",
+        "mod", "newLimitToday", "desc", "name", "lrnToday", "conf", "browserCollapsed", "extendRev", "id",
+        "collapsed", "desiredRetention"};
+    const pb::Message& c = d.common;
+    json j = json::object();
+    std::string other = c.str(255);
+    if (!other.empty()) {
+        json o = json::parse(other, nullptr, false);
+        if (o.is_object())
+            for (auto it = o.begin(); it != o.end(); ++it)
+                if (!RESERVED.count(it.key())) j[it.key()] = it.value();
+    }
+    int64_t day = (int64_t)(uint32_t)c.u64(3);
+    j["id"] = d.id;
+    j["mod"] = d.mtime;
+    j["name"] = d.human_name();
+    j["usn"] = usn;
+    j["lrnToday"] = json::array({day, (int32_t)c.u64(6)});
+    j["revToday"] = json::array({day, (int32_t)c.u64(5)});
+    j["newToday"] = json::array({day, (int32_t)c.u64(4)});
+    j["timeToday"] = json::array({day, (int32_t)c.u64(7)});
+    j["collapsed"] = c.boolean(1);
+    j["browserCollapsed"] = c.boolean(2);
+    if (!d.filtered) {
+        pb::Message n = d.kind.sub(1);
+        j["desc"] = n.str(4);
+        if (n.boolean(5)) j["md"] = true;
+        j["dyn"] = 0;
+        j["conf"] = n.i64(1);
+        j["extendNew"] = (int64_t)(uint32_t)n.u64(2);
+        j["extendRev"] = (int64_t)(uint32_t)n.u64(3);
+        j["reviewLimit"] = n.has(6) ? json((uint32_t)n.u64(6)) : json(nullptr);
+        j["newLimit"] = n.has(7) ? json((uint32_t)n.u64(7)) : json(nullptr);
+        auto day_limit = [&](uint32_t field) -> json {
+            if (!n.has(field)) return nullptr;
+            pb::Message dl = n.sub(field);
+            return {{"limit", (uint32_t)dl.u64(1)}, {"today", (uint32_t)dl.u64(2)}};
+        };
+        j["reviewLimitToday"] = day_limit(8);
+        j["newLimitToday"] = day_limit(9);
+        j["desiredRetention"] = n.has(10) ? json(f2u(n.f32(10) * 100.0f)) : json(nullptr);
+    } else {
+        pb::Message f = d.kind.sub(2);
+        j["desc"] = "";
+        j["dyn"] = 1;
+        j["resched"] = f.boolean(1);
+        json terms = json::array();
+        for (auto& t : f.repeated_sub(2))
+            terms.push_back(json::array({t.str(1), (int32_t)(uint32_t)t.u64(2), (int32_t)t.u64(3)}));
+        j["terms"] = terms;
+        j["separate"] = true;
+        auto delays = f.packed_f32(3);
+        j["delays"] = delays.empty() ? json(nullptr) : json(delays);
+        j["previewDelay"] = (uint32_t)f.u64(4);
+        j["previewAgainSecs"] = (uint32_t)f.u64(7);
+        j["previewHardSecs"] = (uint32_t)f.u64(5);
+        j["previewGoodSecs"] = (uint32_t)f.u64(6);
+    }
+    return j;
+}
+
 json all_config_json(Collection& col) {
     json out = json::object();
     Stmt s(col.db(), "select key, val from config");

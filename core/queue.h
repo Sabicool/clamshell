@@ -47,7 +47,8 @@ DeckCounts deck_counts(Collection& col, int64_t deck_id);
 // limits bottom-up like the deck list on desktop. Cheap enough for the 3DS.
 std::map<int64_t, DeckCounts> all_deck_counts(Collection& col);
 
-// Bumps the deck's "studied today" counters locally (not synced; see README).
+// Bumps the deck's (and its parents') "studied today" counters and marks
+// them changed so they sync, like rslib's update_deck_stats.
 void record_studied(Collection& col, int64_t deck_id, bool was_new, bool was_review, uint32_t millis);
 
 }  // namespace anki

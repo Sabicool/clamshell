@@ -72,6 +72,10 @@ def connect(path):
     return db
 
 
+def deck_jsons(col):
+    return {d["id"]: d for d in col.decks.all()}
+
+
 def table_rows(path):
     db = connect(path)
     cards = sorted(db.execute("select id, nid, did, ord, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data from cards"))
@@ -95,6 +99,7 @@ def main():
             desk_path = os.path.join(tmp, "desktop.anki2")
             snapshot(src, desk_path)
             desk = Collection(desk_path)
+            decks_before = deck_jsons(desk)
             auth = desk.sync_login("test", "test", ENDPOINT)
             desk.close_for_full_sync()
             desk.full_upload_or_download(auth=auth, server_usn=None, upload=True)
@@ -114,6 +119,7 @@ def main():
             random.seed(1)
             ds_cards = due[:20]
             desk_cards = due[20:40]
+            os.environ["ANKI3DS_DECK_STATS"] = "1"
             cli("replay", ds_path, stdin="\n".join(f"{c} {random.choice([1,3,3,3,4])} 5000" for c in ds_cards))
             # desktop reviews different cards and edits a note
             time.sleep(1.5)  # keep review-log ids (millisecond timestamps) distinct
@@ -169,9 +175,38 @@ def main():
                            for n in got)
                 media_ok = set(names) <= set(got) and same
                 print(f"6. media: desktop uploaded {len(names)} files; 3DS downloaded {len(got)}; identical={same}")
-            a_close = desk
-            a = None
+            # decks: everything except today's counters must be unchanged, and
+            # both sides must agree on the counters
+            decks_after = deck_jsons(desk)
+            COUNTERS = {"lrnToday", "revToday", "newToday", "timeToday", "mod", "usn"}
+            deck_ok = True
+            for did, before in decks_before.items():
+                after = decks_after.get(did)
+                if after is None:
+                    deck_ok = False
+                    print(f"  deck {did} missing after sync")
+                    continue
+                diff = {k for k in set(before) | set(after) if k not in COUNTERS and before.get(k) != after.get(k)}
+                if diff:
+                    deck_ok = False
+                    print(f"  deck {before['name']}: unexpected changes in {sorted(diff)}")
+            ds_col = sqlite3.connect(ds_path)
+            studied = {r[0] for r in ds_col.execute(f"select did from cards where id in ({','.join(map(str, ds_cards))})")}
+            ds_col.close()
             desk.close()
+            # compare every deck as desktop sees it with the 3DS copy
+            ds_view = Collection(ds_path)
+            ds_decks = deck_jsons(ds_view)
+            ds_view.close()
+            mismatch = [d for d in decks_after if decks_after[d] != ds_decks.get(d)]
+            changed = [decks_after[d]["name"] for d in decks_after
+                       if decks_after[d]["revToday"] != decks_before[d]["revToday"] or decks_after[d]["newToday"] != decks_before[d]["newToday"]]
+            for d in mismatch[:3]:
+                a_, b_ = decks_after[d], ds_decks.get(d) or {}
+                print(f"  deck {a_['name']}: " + "; ".join(f"{k}: desktop={a_.get(k)!r} 3ds={b_.get(k)!r}" for k in set(a_) | set(b_) if a_.get(k) != b_.get(k)))
+            deck_ok = deck_ok and not mismatch
+            print(f"  decks: {'only today counters changed' if deck_ok else 'PROBLEM'}; {len(mismatch)} differ between desktop and 3DS; "
+                  f"counters updated in: {changed[:6]}")
             a = table_rows(desk_path)
             b = table_rows(ds_path)
             ok = True
@@ -198,7 +233,7 @@ def main():
             # integrity check of the 3DS file
             chk = connect(ds_path).execute("pragma integrity_check").fetchone()[0]
             print(f"  3DS collection integrity: {chk}")
-            ok = ok and chk == "ok" and media_ok
+            ok = ok and chk == "ok" and media_ok and deck_ok
             print("PASS" if ok else "FAIL")
             sys.exit(0 if ok else 1)
         finally:

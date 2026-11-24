@@ -16,9 +16,10 @@ bool merge_notetype_json(Collection& col, const nlohmann::json& nt, std::string&
 bool merge_deck_json(Collection& col, const nlohmann::json& deck, std::string& err);
 bool merge_deck_config_json(Collection& col, const nlohmann::json& conf, std::string& err);
 
-// Local -> legacy JSON, used only for config values (the 3DS never edits decks,
-// presets or note types, so it never needs to send them).
+// Local -> legacy JSON. The 3DS only ever changes a deck's "studied today"
+// counters, and never edits presets or note types.
 nlohmann::json all_config_json(Collection& col);
+nlohmann::json deck_to_json(const Deck& d, int usn);
 
 // Note helpers used when merging notes from the server.
 std::string strip_html_preserving_media(const std::string& html);

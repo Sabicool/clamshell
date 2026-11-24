@@ -183,10 +183,15 @@ int main(int argc, char** argv) {
             int rating;
             uint32_t ms;
             if (!(ss >> cid >> rating >> ms)) continue;
+            auto before = col.get_card(cid);
             if (!sched.answer(cid, (Rating)rating, ms, err)) {
                 fprintf(stderr, "answer %lld failed: %s\n", (long long)cid, err.c_str());
                 return 1;
             }
+            // update the deck's studied-today counters like the app does
+            if (before && getenv("ANKI3DS_DECK_STATS"))
+                record_studied(col, before->did, before->queue == Q_NEW,
+                               before->queue == Q_REVIEW || before->queue == Q_DAY_LEARN, ms);
             n++;
         }
         fprintf(stderr, "answered %d\n", n);

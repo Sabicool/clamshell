@@ -323,7 +323,7 @@ SyncResult SyncClient::normal_sync(Collection& col, std::string& err) {
         return res;
     }
     // The 3DS never edits these; if something marked them pending, stop.
-    for (const char* t : {"decks", "deck_config", "notetypes"})
+    for (const char* t : {"deck_config", "notetypes"})
         if (any_pending(col, t)) {
             err = std::string("unexpected local changes in ") + t + "; please do a full download";
             return res;
@@ -385,7 +385,14 @@ SyncResult SyncClient::normal_sync(Collection& col, std::string& err) {
 
     // unchunked changes
     progress("Syncing (settings)...");
-    json changes = {{"models", json::array()}, {"decks", json::array({json::array(), json::array()})}};
+    json changed_decks = json::array();
+    {
+        std::vector<int64_t> ids = pending_ids(col, "decks");
+        for (int64_t id : ids)
+            if (const Deck* d = col.deck(id)) changed_decks.push_back(deck_to_json(*d, server_usn));
+        set_usn(col, "decks", ids, server_usn);
+    }
+    json changes = {{"models", json::array()}, {"decks", json::array({changed_decks, json::array()})}};
     {
         json tags = json::array();
         Stmt s(col.db(), "select tag from tags where usn = -1");

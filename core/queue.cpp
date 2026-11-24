@@ -425,8 +425,10 @@ void record_studied(Collection& col, int64_t deck_id, bool was_new, bool was_rev
         if (was_new) bump(4, 1);
         if (was_review) bump(5, 1);
         bump(7, millis);
-        Stmt s(col.db(), "update decks set common = ? where id = ?");
-        s.bind_blob(1, c.encode()).bind(2, id);
+        d.mtime = col.now_secs();
+        d.usn = -1;
+        Stmt s(col.db(), "update decks set common = ?, mtime_secs = ?, usn = -1 where id = ?");
+        s.bind_blob(1, c.encode()).bind(2, d.mtime).bind(3, id);
         s.step();
     }
 }
