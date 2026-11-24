@@ -23,7 +23,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-CLI = os.path.join(ROOT, "build", "host", "anki3ds-cli")
+CLI = os.environ.get("ANKI3DS_CLI") or os.path.join(ROOT, "build", "host", "anki3ds-cli")
 sys.path.insert(0, HERE)
 from difftest import DEFAULT_COL, snapshot  # noqa: E402
 

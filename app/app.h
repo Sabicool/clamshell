@@ -53,6 +53,7 @@ struct Settings {
     std::string hkey;
     std::string username;
     std::optional<int32_t> minutes_west;
+    bool tz_auto = true;  // follow the offset desktop Anki records (handles daylight saving)
     float text_zoom = 0.75f;
     bool night = false;
     bool auto_media = true;  // fetch a deck's images when you open it after a sync

@@ -35,6 +35,15 @@ namespace anki {
 
 namespace {
 
+const char* ca_bundle_path() {
+#ifdef ANKI3DS_HOST_TEST
+    static std::string p = std::string(getenv("ANKI3DS_ROMFS") ? getenv("ANKI3DS_ROMFS") : "3ds/romfs") + "/cacert.pem";
+    return p.c_str();
+#else
+    return "romfs:/cacert.pem";
+#endif
+}
+
 struct Tls {
     bool ready = false;
     mbedtls_entropy_context entropy;
@@ -53,7 +62,7 @@ struct Tls {
             error = "random number generator failed to start";
             return false;
         }
-        FILE* f = fopen("romfs:/cacert.pem", "rb");
+        FILE* f = fopen(ca_bundle_path(), "rb");
         if (!f) {
             error = "missing romfs:/cacert.pem";
             return false;

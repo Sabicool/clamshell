@@ -60,6 +60,19 @@ $(BUILD)/anki3ds-cli: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(ZSTD_OBJ) $(BUILD)/sq
 $(BUILD)/anki3ds-sim: $(APP_OBJ) $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/sim.o $(BUILD)/host/http_curl.o
 	$(CXX) $^ -lcurl -o $@
 
+# The 3DS network stack (mbedTLS + sockets) built for the desktop, for testing.
+MBED_SRC := $(filter-out %/net_sockets.c %/timing.c,$(wildcard third_party/mbedtls/library/*.c))
+MBED_OBJ := $(patsubst third_party/mbedtls/library/%.c,$(BUILD)/mbedtls/%.o,$(MBED_SRC))
+MBED_FLAGS := -Ithird_party/mbedtls/include -I3ds/source -Ihost/shim -DMBEDTLS_USER_CONFIG_FILE='"mbedtls_3ds_config.h"'
+$(BUILD)/mbedtls/%.o: third_party/mbedtls/library/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(MBED_FLAGS) -w -c $< -o $@
+$(BUILD)/host/http_3ds.o: 3ds/source/http_3ds.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(MBED_FLAGS) -DANKI3DS_HOST_TEST -c $< -o $@
+$(BUILD)/anki3ds-cli-3dsnet: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(ZSTD_OBJ) $(MBED_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_3ds.o
+	$(CXX) $^ -o $@
+
 test: all
 	tools/.venv/bin/python tools/difftest.py
 

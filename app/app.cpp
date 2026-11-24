@@ -38,12 +38,13 @@ void Settings::load(const std::string& path) {
     night = j.value("night", night);
     auto_media = j.value("auto_media", auto_media);
     reveal_hidden = j.value("reveal_hidden", reveal_hidden);
+    tz_auto = j.value("tz_auto", tz_auto);
 }
 
 void Settings::save(const std::string& path) const {
     json j = {{"endpoint", endpoint}, {"hkey", hkey},       {"username", username},
               {"text_zoom", text_zoom}, {"night", night}, {"auto_media", auto_media},
-              {"reveal_hidden", reveal_hidden}};
+              {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}};
     if (minutes_west) j["minutes_west"] = *minutes_west;
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return;
@@ -104,11 +105,15 @@ void App::open_collection() {
                      Mode::Settings);
         return;
     }
-    if (!settings_.minutes_west) {
-        // Use the time zone desktop Anki last recorded, or the host's.
+    if (!settings_.minutes_west || settings_.tz_auto) {
+        // Use the host's time zone if it has one (desktop simulator), otherwise the
+        // offset desktop Anki last recorded in the collection.
         auto sys = pf_.system_minutes_west();
-        settings_.minutes_west = sys ? *sys : (int32_t)col_.config_int("localOffset", 0);
-        settings_.save(settings_path_);
+        int32_t west = sys ? *sys : (int32_t)col_.config_int("localOffset", settings_.minutes_west.value_or(0));
+        if (settings_.minutes_west != west) {
+            settings_.minutes_west = west;
+            settings_.save(settings_path_);
+        }
     }
     configure_clock();
     build_rows();
@@ -340,6 +345,13 @@ void App::sync_flow() {
     switch (r.status) {
         case SyncStatus::NoChanges:
         case SyncStatus::Synced: {
+            if (settings_.tz_auto && !pf_.system_minutes_west()) {
+                int32_t west = (int32_t)col_.config_int("localOffset", settings_.minutes_west.value_or(0));
+                if (west != settings_.minutes_west) {
+                    settings_.minutes_west = west;
+                    settings_.save(settings_path_);
+                }
+            }
             char buf[64];
             time_t now = (time_t)(pf_.local_clock_ms() / 1000);
             struct tm tmv;
@@ -795,7 +807,11 @@ void App::on_settings(const Input& in) {
             if (delta || activate) settings_.night = !settings_.night;
             break;
         case 2:
-            if (delta) settings_.minutes_west = settings_.minutes_west.value_or(0) - delta * 30;
+            if (delta) {
+                settings_.minutes_west = settings_.minutes_west.value_or(0) - delta * 30;
+                settings_.tz_auto = false;
+            }
+            if (activate) settings_.tz_auto = true;
             break;
         case 3:
             if (delta || activate) settings_.auto_media = !settings_.auto_media;
@@ -835,7 +851,9 @@ void App::draw_settings() {
         switch (i) {
             case 0: value = "‹ " + std::to_string((int)std::lround(settings_.text_zoom * 100)) + "% ›"; break;
             case 1: value = settings_.night ? "On" : "Off"; break;
-            case 2: value = "‹ " + fmt_offset(settings_.minutes_west.value_or(0)) + " ›"; break;
+            case 2:
+                value = "‹ " + fmt_offset(settings_.minutes_west.value_or(0)) + (settings_.tz_auto ? " (auto)" : "") + " ›";
+                break;
             case 3: value = settings_.auto_media ? "On" : "Off"; break;
             case 4: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
             default: break;
@@ -848,8 +866,9 @@ void App::draw_settings() {
         case 0: help = "Cards are styled for big screens. Shrink or enlarge card text with ◀ ▶."; break;
         case 1: help = "Dark background for cards and menus."; break;
         case 2:
-            help = "The 3DS clock has no time zone. Set your offset from UTC so the day rolls over at the same "
-                   "time as on your other devices, and so the server accepts the sync (clocks must agree within 5 minutes).";
+            help = "The 3DS clock has no time zone. 'Auto' uses the offset desktop Anki last recorded, so daylight "
+                   "saving follows your other devices after a sync. Use ◀ ▶ to set it by hand, A to go back to auto. "
+                   "The server refuses syncs if clocks disagree by more than 5 minutes.";
             break;
         case 3: help = "When you open a deck, fetch any of its images that aren't on the SD card yet."; break;
         case 4: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
