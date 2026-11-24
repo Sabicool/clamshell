@@ -21,7 +21,7 @@ APP_AUTHOR := anki-3ds
 
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 # -ffp-contract=off keeps float rounding identical to desktop Anki's scheduler.
-COMMON := -O2 -g -mword-relocations -ffunction-sections -fdata-sections -ffp-contract=off $(ARCH) -D__3DS__ \
+COMMON := -MMD -MP -O2 -g -mword-relocations -ffunction-sections -fdata-sections -ffp-contract=off $(ARCH) -D__3DS__ \
 	-I$(DEVKITPRO)/libctru/include -I$(ROOT)/app -I$(ROOT)/core -I$(ROOT)/core/render -I$(ROOT)/core/js -I$(TP)/quickjs -I$(TP) -I$(TP)/sqlite -I$(TP)/zstd \
 	-I$(TP)/litehtml/include -I$(TP)/litehtml/include/litehtml \
 	-I$(TP)/litehtml/src/gumbo/include -I$(TP)/litehtml/src/gumbo/include/gumbo \
@@ -91,6 +91,8 @@ $(TARGET).smdh: icon.png
 $(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh $(shell find romfs -type f)
 	@$(TOOLS)/3dsxtool $(TARGET).elf $@ --smdh=$(TARGET).smdh --romfs=romfs
 	@echo built $@
+
+-include $(OBJS:.o=.d)
 
 clean:
 	rm -rf $(BUILD) $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh
