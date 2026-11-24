@@ -1,6 +1,7 @@
 #include "sync.h"
 
 #include <cstdio>
+#include <chrono>
 #include <random>
 #include <set>
 
@@ -51,8 +52,10 @@ bool zstd_decompress(const std::string& in, std::string& out) {
 
 static std::string random_session() {
     static const char* chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    std::random_device rd;
-    std::mt19937 g(rd());
+    // std::random_device isn't available on every target (newlib on the 3DS)
+    uint64_t seed = (uint64_t)std::chrono::system_clock::now().time_since_epoch().count() ^
+                    (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
+    std::mt19937 g((uint32_t)(seed ^ (seed >> 32)));
     std::string s;
     for (int i = 0; i < 8; i++) s += chars[g() % 62];
     return s;

@@ -6,7 +6,7 @@ CC ?= clang
 BUILD := build/host
 # -ffp-contract=off: never fuse float multiply-adds; Rust doesn't, and the
 # scheduler must round exactly like desktop Anki.
-INCLUDES := -Icore -Icore/render -Ithird_party -Ithird_party/sqlite -Ithird_party/zstd \
+INCLUDES := -Icore -Icore/render -Iapp -Ithird_party -Ithird_party/sqlite -Ithird_party/zstd \
 	-Ithird_party/litehtml/include -Ithird_party/litehtml/include/litehtml \
 	-Ithird_party/litehtml/src/gumbo/include -Ithird_party/litehtml/src/gumbo/include/gumbo
 CXXFLAGS := -std=c++17 -O2 -g -ffp-contract=off -Wall -Wno-unused-function $(INCLUDES)
@@ -21,7 +21,14 @@ GUMBO_OBJ := $(patsubst third_party/litehtml/src/gumbo/%.c,$(BUILD)/gumbo/%.o,$(
 ZSTD_SRC := $(wildcard third_party/zstd/common/*.c third_party/zstd/compress/*.c third_party/zstd/decompress/*.c)
 ZSTD_OBJ := $(patsubst third_party/zstd/%.c,$(BUILD)/zstd/%.o,$(ZSTD_SRC))
 
-all: $(BUILD)/anki3ds-cli
+all: $(BUILD)/anki3ds-cli $(BUILD)/anki3ds-sim
+
+APP_SRC := $(wildcard app/*.cpp)
+APP_OBJ := $(patsubst app/%.cpp,$(BUILD)/app/%.o,$(APP_SRC))
+
+$(BUILD)/app/%.o: app/%.cpp $(wildcard app/*.h core/*.h core/render/*.h)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/core/%.o: core/%.cpp $(wildcard core/*.h core/render/*.h)
 	@mkdir -p $(dir $@)
@@ -48,6 +55,9 @@ $(BUILD)/host/%.o: host/%.cpp $(wildcard core/*.h)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/anki3ds-cli: $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/cli.o $(BUILD)/host/http_curl.o
+	$(CXX) $^ -lcurl -o $@
+
+$(BUILD)/anki3ds-sim: $(APP_OBJ) $(CORE_OBJ) $(LH_OBJ) $(GUMBO_OBJ) $(ZSTD_OBJ) $(BUILD)/sqlite3.o $(BUILD)/host/sim.o $(BUILD)/host/http_curl.o
 	$(CXX) $^ -lcurl -o $@
 
 test: all

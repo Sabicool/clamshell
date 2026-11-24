@@ -122,8 +122,8 @@ std::pair<uint32_t, uint32_t> constrained_fuzz_bounds(float interval, uint32_t m
     if (iv < (float)minimum) iv = (float)minimum;
     if (iv > (float)maximum) iv = (float)maximum;
     auto [lower, upper] = fuzz_bounds(iv);
-    lower = std::clamp(lower, minimum, maximum);
-    upper = std::clamp(upper, minimum, maximum);
+    lower = std::clamp<uint32_t>(lower, minimum, maximum);
+    upper = std::clamp<uint32_t>(upper, minimum, maximum);
     if (upper == lower && upper > 2 && upper < maximum) upper = lower + 1;
     return {lower, upper};
 }
@@ -133,7 +133,7 @@ uint32_t with_review_fuzz(std::optional<float> fuzz_factor, float interval, uint
         auto [lower, upper] = constrained_fuzz_bounds(interval, minimum, maximum);
         return f2u(std::floor((float)lower + *fuzz_factor * (float)(1 + upper - lower)));
     }
-    return std::clamp(f2u(std::round(interval)), minimum, maximum);
+    return std::clamp<uint32_t>(f2u(std::round(interval)), minimum, maximum);
 }
 
 static uint32_t minimum_review_fuzz_interval(float interval, uint32_t previous_interval, uint32_t maximum_interval) {
@@ -145,8 +145,8 @@ static uint32_t minimum_review_fuzz_interval(float interval, uint32_t previous_i
 }
 
 std::pair<uint32_t, uint32_t> StateContext::min_and_max_review_intervals(uint32_t minimum) const {
-    uint32_t maximum = std::max(maximum_review_interval, 1u);
-    minimum = std::clamp(minimum, 1u, maximum);
+    uint32_t maximum = std::max<uint32_t>(maximum_review_interval, 1u);
+    minimum = std::clamp<uint32_t>(minimum, 1u, maximum);
     return {minimum, maximum};
 }
 
@@ -282,7 +282,7 @@ static uint32_t constrain_passing_interval(const StateContext& ctx, float interv
     if (!ctx.fsrs_next_states) interval = interval * ctx.interval_multiplier;
     auto [mn, mx] = ctx.min_and_max_review_intervals(minimum);
     if (fuzz) return ctx.with_review_fuzz(interval, mn, mx);
-    return std::clamp(f2u(std::round(interval)), mn, mx);
+    return std::clamp<uint32_t>(f2u(std::round(interval)), mn, mx);
 }
 
 static std::pair<float, std::optional<MemoryState>> failing_review_interval(const ReviewState& self,
@@ -299,15 +299,15 @@ static void passing_review_intervals(const ReviewState& self, const StateContext
         const NextStates& st = *ctx.fsrs_next_states;
         hard = constrain_passing_interval(
             ctx, st.hard.interval,
-            std::max(minimum_review_fuzz_interval(st.hard.interval, self.scheduled_days, ctx.maximum_review_interval), 1u),
+            std::max<uint32_t>(minimum_review_fuzz_interval(st.hard.interval, self.scheduled_days, ctx.maximum_review_interval), 1u),
             true);
         good = constrain_passing_interval(
             ctx, st.good.interval,
-            std::max(minimum_review_fuzz_interval(st.good.interval, self.scheduled_days, ctx.maximum_review_interval), hard + 1),
+            std::max<uint32_t>(minimum_review_fuzz_interval(st.good.interval, self.scheduled_days, ctx.maximum_review_interval), hard + 1),
             true);
         easy = constrain_passing_interval(
             ctx, st.easy.interval,
-            std::max(minimum_review_fuzz_interval(st.easy.interval, self.scheduled_days, ctx.maximum_review_interval), good + 1),
+            std::max<uint32_t>(minimum_review_fuzz_interval(st.easy.interval, self.scheduled_days, ctx.maximum_review_interval), good + 1),
             true);
     } else if (self.days_late() < 0) {
         float scheduled = std::max((float)self.scheduled_days, 1.0f);
@@ -320,7 +320,7 @@ static void passing_review_intervals(const ReviewState& self, const StateContext
         easy = constrain_passing_interval(ctx, std::max(elapsed * self.ease_factor, scheduled) * reduced_bonus, 0, false);
     } else {
         float current_interval = std::max((float)self.scheduled_days, 1.0f);
-        float days_late = (float)std::max(self.days_late(), 0);
+        float days_late = (float)std::max<int32_t>(self.days_late(), 0);
         float hard_factor = ctx.hard_multiplier;
         uint32_t hard_minimum = hard_factor <= 1.0f ? 0 : self.scheduled_days + 1;
         hard = constrain_passing_interval(ctx, current_interval * hard_factor, hard_minimum, true);

@@ -422,7 +422,7 @@ void Collection::set_config_json(const std::string& key, const std::string& val,
 SchedTimingToday Collection::timing_for(int64_t now, int32_t minutes_west) {
     int64_t rollover = std::min<int64_t>(config_int("rollover", 4), 23);
     auto creation = config_json("creationOffset");
-    auto clamp_west = [](int32_t m) { return std::clamp(m, -23 * 60, 23 * 60); };
+    auto clamp_west = [](int32_t m) { return std::clamp<int32_t>(m, -23 * 60, 23 * 60); };
     int64_t cur_west = clamp_west(minutes_west);
     auto floor_div = [](int64_t a, int64_t b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
     SchedTimingToday t;
@@ -856,7 +856,7 @@ struct Scheduler::Updater {
                 return (uint32_t)(now - last_answered);
             } else if (card.queue == Q_DAY_LEARN) {
                 int32_t days_since = (int32_t)timing.days_elapsed;
-                int32_t last_ivl_days = (int32_t)std::max(last_ivl / 86400, 1u);
+                int32_t last_ivl_days = (int32_t)std::max<uint32_t>(last_ivl / 86400, 1u);
                 int32_t elapsed_days = days_since - due + last_ivl_days;
                 return (uint32_t)(elapsed_days * 86400);
             }
@@ -867,7 +867,7 @@ struct Scheduler::Updater {
         switch (card.ctype) {
             case CTYPE_NEW:
                 n.kind = NormalKind::New;
-                n.new_position = (uint32_t)std::max(due, 0);
+                n.new_position = (uint32_t)std::max<int32_t>(due, 0);
                 break;
             case CTYPE_LEARN: {
                 n.kind = NormalKind::Learning;
@@ -883,7 +883,7 @@ struct Scheduler::Updater {
                 n.kind = NormalKind::Review;
                 n.review.scheduled_days = card.ivl;
                 n.review.elapsed_days =
-                    (uint32_t)std::max((int32_t)card.ivl - (due - (int32_t)timing.days_elapsed), 0);
+                    (uint32_t)std::max<int32_t>((int32_t)card.ivl - (due - (int32_t)timing.days_elapsed), 0);
                 n.review.ease_factor = ease;
                 n.review.lapses = card.lapses;
                 n.review.leeched = false;
