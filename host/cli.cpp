@@ -12,6 +12,7 @@
 #include "queue.h"
 #ifndef ANKI3DS_NO_SYNC
 #include "sync.h"
+#include "media.h"
 #endif
 #ifndef ANKI3DS_NO_TEMPLATE
 #include "template.h"
@@ -79,7 +80,8 @@ static int usage() {
             "  anki3ds-cli shot <collection> <card id> <out prefix> [media dir] [text zoom]\n"
             "  anki3ds-cli queue <collection> <deck id> [n]\n"
             "  anki3ds-cli sync <collection> <endpoint> <hkey> [--full-download]\n"
-            "  anki3ds-cli login <endpoint> <user> <pass>\n");
+            "  anki3ds-cli login <endpoint> <user> <pass>\n"
+            "  anki3ds-cli media <collection> <endpoint> <hkey> <deck id> <media dir>\n");
     return 2;
 }
 
@@ -236,6 +238,16 @@ int main(int argc, char** argv) {
     }
 #endif
 #ifndef ANKI3DS_NO_SYNC
+    if (cmd == "media") {
+        if (argc < 7) return usage();
+        SyncClient client(argv[3]);
+        client.hkey = argv[4];
+        auto names = missing_media_for_deck(col, std::stoll(argv[5]), argv[6]);
+        MediaDownloadResult res;
+        bool ok = download_media(client, names, argv[6], res, err);
+        printf("missing %zu, downloaded %d%s%s\n", names.size(), res.downloaded, ok ? "" : ", error: ", err.c_str());
+        return ok ? 0 : 1;
+    }
     if (cmd == "sync") {
         if (argc < 5) return usage();
         SyncClient client(argv[3]);

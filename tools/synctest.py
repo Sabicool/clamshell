@@ -140,8 +140,38 @@ def main():
             desktop_sync(desk, auth)
             cli("sync", ds_path, ENDPOINT, hkey)
             print("5. desktop -> 3DS -> desktop -> 3DS synced")
-            desk.close()
 
+            # media: give desktop a handful of real files used by one deck, sync
+            # them to the server, then have the 3DS fetch just that deck's media
+            src_media = os.path.join(os.path.dirname(src), "collection.media")
+            media_ok = True
+            if os.path.isdir(src_media):
+                db = sqlite3.connect(ds_path)
+                did = db.execute("select did from cards c join notes n on n.id = c.nid where n.flds like '%<img%' "
+                                 "group by did order by count() desc limit 1").fetchone()[0]
+                flds = [r[0] for r in db.execute(f"select flds from notes where id in (select nid from cards where did = {did})")]
+                db.close()
+                import re as _re
+                names = sorted({m for f in flds for m in _re.findall(r'src="([^"/]+)"', f)})
+                names = [n for n in names if os.path.exists(os.path.join(src_media, n))][:30]
+                for n in names:
+                    shutil.copy(os.path.join(src_media, n), os.path.join(desk.media.dir(), n))
+                desk.sync_media(auth)
+                for _ in range(300):
+                    if not desk.media_sync_status().active:
+                        break
+                    time.sleep(0.2)
+                ds_media = os.path.join(tmp, "3ds-media")
+                os.makedirs(ds_media, exist_ok=True)
+                cli("media", ds_path, ENDPOINT, hkey, str(did), ds_media)
+                got = sorted(os.listdir(ds_media))
+                same = all(open(os.path.join(ds_media, n), "rb").read() == open(os.path.join(src_media, n), "rb").read()
+                           for n in got)
+                media_ok = set(names) <= set(got) and same
+                print(f"6. media: desktop uploaded {len(names)} files; 3DS downloaded {len(got)}; identical={same}")
+            a_close = desk
+            a = None
+            desk.close()
             a = table_rows(desk_path)
             b = table_rows(ds_path)
             ok = True
@@ -168,8 +198,9 @@ def main():
             # integrity check of the 3DS file
             chk = connect(ds_path).execute("pragma integrity_check").fetchone()[0]
             print(f"  3DS collection integrity: {chk}")
-            print("PASS" if ok and chk == "ok" else "FAIL")
-            sys.exit(0 if ok and chk == "ok" else 1)
+            ok = ok and chk == "ok" and media_ok
+            print("PASS" if ok else "FAIL")
+            sys.exit(0 if ok else 1)
         finally:
             server.terminate()
             try:

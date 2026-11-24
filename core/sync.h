@@ -41,10 +41,16 @@ public:
     // `path` is where the collection lives (it may not exist yet on first use).
     SyncResult full_download(Collection& col, const std::string& path, std::string& err);
 
+    // POST to endpoint + path (e.g. "msync/begin"); body is zstd-compressed JSON.
+    bool request_path(const std::string& path, const std::string& json_body, std::string& out, std::string& err,
+                      int* status_out = nullptr);
+
 private:
     std::string session_;
     bool request(const std::string& method, const std::string& json_body, std::string& out, std::string& err,
-                 int* status_out = nullptr);
+                 int* status_out = nullptr) {
+        return request_path("sync/" + method, json_body, out, err, status_out);
+    }
     void progress(const std::string& s) {
         if (on_progress) on_progress(s);
     }

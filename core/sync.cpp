@@ -62,12 +62,12 @@ SyncClient::SyncClient(std::string ep) : endpoint(std::move(ep)), session_(rando
     if (!endpoint.empty() && endpoint.back() != '/') endpoint += '/';
 }
 
-bool SyncClient::request(const std::string& method, const std::string& body, std::string& out, std::string& err,
-                         int* status_out) {
+bool SyncClient::request_path(const std::string& path, const std::string& body, std::string& out, std::string& err,
+                              int* status_out) {
     json hdr = {{"v", 11}, {"k", hkey}, {"c", client_version}, {"s", session_}};
     std::map<std::string, std::string> headers = {{"anki-sync", hdr.dump()},
                                                   {"Content-Type", "application/octet-stream"}};
-    std::string url = endpoint + "sync/" + method;
+    std::string url = endpoint + path;
     HttpResponse resp;
     if (!http_post(url, headers, zstd_compress(body), resp, err)) return false;
     if (status_out) *status_out = resp.status;
