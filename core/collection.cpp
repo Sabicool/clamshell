@@ -98,6 +98,28 @@ static int unicase_cmp(void*, int la, const void* a, int lb, const void* b) {
     return 0;
 }
 
+bool ensure_rollback_journal(const std::string& path) {
+    FILE* wal = fopen((path + "-wal").c_str(), "rb");
+    if (wal) {
+        fseek(wal, 0, SEEK_END);
+        long n = ftell(wal);
+        fclose(wal);
+        if (n > 0) return false;
+        remove((path + "-wal").c_str());
+        remove((path + "-shm").c_str());
+    }
+    FILE* f = fopen(path.c_str(), "r+b");
+    if (!f) return true;
+    unsigned char hdr[20];
+    if (fread(hdr, 1, 20, f) == 20 && memcmp(hdr, "SQLite format 3", 15) == 0 && (hdr[18] == 2 || hdr[19] == 2)) {
+        unsigned char one[2] = {1, 1};
+        fseek(f, 18, SEEK_SET);
+        fwrite(one, 1, 2, f);
+    }
+    fclose(f);
+    return true;
+}
+
 void register_unicase(sqlite3* db) {
     sqlite3_create_collation_v2(db, "unicase", SQLITE_UTF8, nullptr, unicase_cmp, nullptr);
 }
@@ -272,6 +294,10 @@ Collection::~Collection() { close(); }
 
 bool Collection::open(const std::string& path, std::string& err) {
     close();
+    if (!ensure_rollback_journal(path)) {
+        err = "this collection has unsaved changes in a -wal file; close desktop Anki before copying it";
+        return false;
+    }
     if (sqlite3_open_v2(path.c_str(), &db_.h, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
         err = db_.h ? sqlite3_errmsg(db_.h) : "could not open collection";
         close();

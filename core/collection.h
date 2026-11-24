@@ -183,6 +183,12 @@ private:
     sqlite3_stmt* s_ = nullptr;
 };
 
+// If `path` is flagged as a WAL database but has no pending WAL data, marks it
+// as a rollback-journal database (what `pragma journal_mode=delete` does), so
+// SQLite builds without WAL support (the 3DS) can open it. Returns false if a
+// non-empty -wal file exists (the file must be checkpointed by Anki first).
+bool ensure_rollback_journal(const std::string& path);
+
 // Registers Anki's "unicase" collation on a raw connection.
 void register_unicase(sqlite3* db);
 

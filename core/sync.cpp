@@ -561,6 +561,7 @@ SyncResult SyncClient::full_download(Collection& col, const std::string& path, s
         return res;
     }
     progress("Checking download...");
+    ensure_rollback_journal(tmp);
     {
         sqlite3* db = nullptr;
         if (sqlite3_open(tmp.c_str(), &db) != SQLITE_OK) {
