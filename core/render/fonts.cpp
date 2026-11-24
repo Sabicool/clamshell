@@ -103,6 +103,13 @@ const FontLib::Glyph& FontLib::glyph(FaceId face, float px, uint32_t cp, FaceId&
     Glyph g;
     const stbtt_fontinfo& info = faces_[used]->info;
     float scale = stbtt_ScaleForMappingEmToPixels(&info, ipx / 4.0f);
+    bool zero_width = cp == 0xFE0F || cp == 0xFE0E || cp == 0x200D || cp == 0x200B || (cp >= 0x1F3FB && cp <= 0x1F3FF);
+    if (!stbtt_FindGlyphIndex(&info, (int)cp) && cp > 0x20) {
+        g.missing = !zero_width;
+        g.advance = zero_width ? 0 : ipx / 4.0f * 0.8f + 3;
+        cache_bytes_ += 32;
+        return cache_.emplace(key, std::move(g)).first->second;
+    }
     int adv, lsb;
     stbtt_GetCodepointHMetrics(&info, (int)cp, &adv, &lsb);
     g.advance = adv * scale;
@@ -151,15 +158,12 @@ float FontLib::draw(Canvas& c, FaceId face, float px, float x, float y, const ch
                     uint8_t cov = g.bitmap[(size_t)yy * g.w + xx];
                     if (cov) c.blend(gx + xx, gy + yy, argb, cov);
                 }
-        } else if (cp > 0x20 && cp != 0xA0 && g.advance <= 0) {
-            // missing glyph: draw a small box
-            int bx = (int)pen, by = (int)(baseline - m.ascent * 0.7f), bw = (int)(px * 0.5f), bh = (int)(m.ascent * 0.7f);
-            c.fill_rect(bx, by, bw, 1, argb);
-            c.fill_rect(bx, by + bh, bw, 1, argb);
-            c.fill_rect(bx, by, 1, bh, argb);
-            c.fill_rect(bx + bw, by, 1, bh + 1, argb);
-            pen += px * 0.6f;
-            continue;
+        } else if (g.missing) {
+            // No bundled font has this glyph (usually an emoji): draw a soft
+            // rounded token so placeholders like Malleus's hidden clozes show.
+            int bw = (int)(px * 0.8f), bh = (int)(m.ascent * 0.75f);
+            int bx = (int)pen + 1, by = (int)(baseline - bh);
+            c.fill_round_rect(bx, by, bw, bh, bh / 3, (argb & 0x00FFFFFF) | 0x66000000);
         }
         pen += g.advance;
     }

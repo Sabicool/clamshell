@@ -17,6 +17,7 @@
 #ifndef ANKI3DS_NO_TEMPLATE
 #include "template.h"
 #include "render/card_view.h"
+#include "js/card_js.h"
 #endif
 
 using namespace anki;
@@ -242,11 +243,57 @@ int main(int argc, char** argv) {
         if (getenv("ANKI3DS_REVEAL")) opt.reveal_hidden = true;
         CardView view(fonts);
         std::string prefix = argv[4];
-        view.render(r.question, r.css, r.ord, opt);
+        bool js = getenv("ANKI3DS_JS") != nullptr;
+        std::map<std::string, std::string> storage;
+        js::CardScript qs, as;
+        std::string qhtml = js ? qs.run(r.question, storage) : r.question;
+        if (js && !qs.log().empty()) fprintf(stderr, "[js question]\n%s", qs.log().c_str());
+        if (js && getenv("ANKI3DS_JS_EVAL")) fprintf(stderr, "[eval] %s\n", qs.eval(getenv("ANKI3DS_JS_EVAL")).c_str());
+        view.render(qhtml, r.css, r.ord, opt);
         view.canvas().save_png(prefix + "-q.png");
         printf("question: %d px tall\n", view.content_height());
-        view.render(r.answer, r.css, r.ord, opt);
+        if (js && getenv("ANKI3DS_QKEYS")) {
+            std::string keys = getenv("ANKI3DS_QKEYS");
+            size_t p = 0;
+            int k = 0;
+            while (p <= keys.size()) {
+                size_t q = keys.find(',', p);
+                std::string code = keys.substr(p, q == std::string::npos ? std::string::npos : q - p);
+                if (!code.empty() && qs.key(code)) {
+                    view.render(qs.html(), r.css, r.ord, opt);
+                    view.canvas().save_png(prefix + "-q-key" + std::to_string(++k) + ".png");
+                    printf("question after %s: changed\n", code.c_str());
+                } else if (!code.empty()) {
+                    printf("question after %s: no change\n", code.c_str());
+                }
+                if (q == std::string::npos) break;
+                p = q + 1;
+            }
+        }
+        size_t qlog = qs.log().size();
+        std::string ahtml = js ? qs.show_answer(r.answer) : r.answer;
+        if (js && qs.log().size() > qlog) fprintf(stderr, "[js answer]\n%s", qs.log().c_str() + qlog);
+        view.render(ahtml, r.css, r.ord, opt);
         view.canvas().save_png(prefix + "-a.png");
+        if (js && getenv("ANKI3DS_KEYS")) {
+            std::string keys = getenv("ANKI3DS_KEYS");
+            size_t p = 0;
+            int k = 0;
+            while (p <= keys.size()) {
+                size_t q = keys.find(',', p);
+                std::string code = keys.substr(p, q == std::string::npos ? std::string::npos : q - p);
+                if (!code.empty() && qs.key(code)) {
+                    view.render(qs.html(), r.css, r.ord, opt);
+                    view.canvas().save_png(prefix + "-a-key" + std::to_string(++k) + ".png");
+                    printf("answer after %s: changed\n", code.c_str());
+                } else if (!code.empty()) {
+                    printf("answer after %s: no change\n", code.c_str());
+                }
+                if (q == std::string::npos) break;
+                p = q + 1;
+            }
+        }
+
         printf("answer: %d px tall (answer anchor at %d)\n", view.content_height(), view.answer_anchor());
         return 0;
     }

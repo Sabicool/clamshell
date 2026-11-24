@@ -37,6 +37,7 @@ const std::map<std::string, std::string>& symbols() {
         {"%", "%"}, {"$", "$"}, {"#", "#"}, {"&", "&amp;"}, {"{", "{"}, {"}", "}"}, {"_", "_"},
         {"left", ""}, {"right", ""}, {"big", ""}, {"Big", ""}, {"bigg", ""}, {"Bigg", ""},
         {"displaystyle", ""}, {"textstyle", ""}, {"limits", ""}, {"nolimits", ""},
+        {"rm", ""}, {"it", ""}, {"sf", ""}, {"tt", ""}, {"cal", ""}, {"scriptstyle", ""}, {"normalsize", ""},
         {"log", "log"}, {"ln", "ln"}, {"exp", "exp"}, {"sin", "sin"}, {"cos", "cos"}, {"tan", "tan"},
         {"max", "max"}, {"min", "min"}, {"lim", "lim"}, {"det", "det"},
         {"langle", "⟨"}, {"rangle", "⟩"}, {"lceil", "⌈"}, {"rceil", "⌉"}, {"lfloor", "⌊"}, {"rfloor", "⌋"},
@@ -250,14 +251,31 @@ std::string tex_to_html(const std::string& tex) {
 }
 
 std::string render_mathjax_in_html(const std::string& html) {
+    // Only text between tags is rewritten; attribute values (e.g. data-cloze)
+    // must keep their TeX untouched.
     std::string out;
     size_t i = 0;
     while (i < html.size()) {
+        if (html[i] == '<') {
+            size_t e = html.find('>', i);
+            if (e == std::string::npos) {
+                out += html.substr(i);
+                break;
+            }
+            out += html.substr(i, e - i + 1);
+            i = e + 1;
+            continue;
+        }
+        // text run up to the next tag; MathJax may span tags (e.g. <br>), so
+        // look for the closing delimiter anywhere after the opener
+        size_t next_tag = html.find('<', i);
         size_t a = html.find("\\(", i), b = html.find("\\[", i);
         size_t start = std::min(a, b);
-        if (start == std::string::npos) {
-            out += html.substr(i);
-            break;
+        if (start == std::string::npos || (next_tag != std::string::npos && start > next_tag)) {
+            size_t stop = next_tag == std::string::npos ? html.size() : next_tag;
+            out += html.substr(i, stop - i);
+            i = stop;
+            continue;
         }
         bool display = start == b;
         const char* close = display ? "\\]" : "\\)";

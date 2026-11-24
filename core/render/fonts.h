@@ -37,6 +37,7 @@ private:
     struct Glyph {
         int w = 0, h = 0, xoff = 0, yoff = 0;
         float advance = 0;
+        bool missing = false;  // no bundled font has this code point
         std::vector<uint8_t> bitmap;
     };
     std::vector<std::unique_ptr<Face>> faces_;

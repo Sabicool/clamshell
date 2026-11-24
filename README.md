@@ -1,6 +1,6 @@
 # Anki for 3DS
 
-An unofficial Anki client for the New Nintendo 3DS (homebrew). It reviews your real Anki collection with the same FSRS scheduling as desktop Anki, renders cards' HTML and CSS (including tables, images, image occlusion masks and simple MathJax), and syncs with an Anki sync server.
+An unofficial Anki client for the New Nintendo 3DS (homebrew). It reviews your real Anki collection with the same FSRS scheduling as desktop Anki, renders cards' HTML and CSS (including tables, images, image occlusion masks and simple MathJax), runs card templates' JavaScript, and syncs with an Anki sync server.
 
 Status: first draft. Everything below "Verified" was tested on a Mac against the real Anki 26.08 engine; nothing has run on 3DS hardware yet.
 
@@ -9,7 +9,8 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 - **Scheduling matches desktop Anki exactly.** `tools/difftest.py` compares this code with the official `anki` 26.08 Python package (the same Rust engine as desktop). On a copy of a real 17,000-card FSRS collection, all 9,335 active cards produce identical next states (intervals, stability, difficulty, steps), with fuzz on. Studying every due card in the Malleus deck (65 answers, load balancer on) produced identical card rows and review-log rows.
 - **Sync round trip.** `tools/synctest.py` runs Anki's own sync server locally: desktop uploads, the 3DS client downloads, both sides study and edit, both sync. Afterwards all cards, notes and review-log rows are identical on both sides and the 3DS file passes SQLite's integrity check. Per-deck image download is checked byte for byte.
 - **Deck counts** (new/learning/due) match desktop for all 432 decks in the test collection.
-- **Card rendering**: `anki3ds-cli shot` renders cards to PNG with the same code the 3DS uses. Malleus cloze cards, tables, images and Image Occlusion Enhanced cards render correctly.
+- **Card rendering**: `anki3ds-cli shot` renders cards to PNG with the same code the 3DS uses. Malleus cloze cards, tables, images, Image Occlusion Enhanced and Anki's built-in Image Occlusion render correctly.
+- **Card scripts**: Malleus's template JavaScript runs under QuickJS; one-by-one cloze cards reveal line by line with ▶ and hide with ◀, as on desktop.
 - **The app's screens and flows** run in a desktop simulator (`tools/uitest.py`): sign in, download, deck list, study, answer, sync, settings. Screenshots go to `build/ui-shots/`.
 - **The 3DS network code** (`3ds/source/http_3ds.cpp`: sockets, mbedTLS, chunked downloads) was compiled for the Mac with a small shim and passed the same sync test, including the 76 MB collection download. Its TLS accepts valid certificates and rejects expired or wrong-host ones.
 - The 3DS build (`make -C 3ds`) compiles and links with devkitARM r68.
@@ -40,7 +41,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 | Screen | Controls |
 |---|---|
 | Deck list | ↑↓ choose, ◀▶ collapse/expand, L/R page, **A** study, **X** sync, **Y** download images for the deck, **SELECT** settings, **START** quit |
-| Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, **SELECT** undo last answer, **START** back to decks |
+| Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, ◀ ▶ send arrow keys to the card (e.g. Malleus one-by-one reveal), **SELECT** undo last answer, **START** back to decks |
 | Answer | **B** Again, **Y** Hard, **A** Good, **X** Easy (or tap the buttons); **ZR** or tap *Show extra sections* to open sections a template hides behind buttons (e.g. Malleus resources) |
 | Settings | ↑↓ choose, ◀▶ change, **A** select, **B** back |
 
@@ -50,12 +51,13 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 - `core/states.cpp`, `core/fsrs.cpp`, `core/rng.cpp` are close ports of Anki 26.08's `rslib/src/scheduler/states`, the `fsrs` 6.6.1 crate's inference code, and the parts of Rust's `rand` 0.9 that Anki uses for fuzz and load balancing, so random choices are bit-identical.
 - `core/sync.cpp` implements sync protocol v11 (zstd-compressed JSON over HTTP POST). It never does a full upload; if a full sync is needed it only offers to download.
 - `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml), draws text with stb_truetype and the DejaVu fonts, decodes images with stb_image and SVG masks with nanosvg, and turns `\(...\)` MathJax into Unicode/HTML.
+- `core/js/` runs template JavaScript with [QuickJS-ng](https://github.com/quickjs-ng/quickjs) against a gumbo-parsed DOM, then hands the resulting HTML to the renderer. Question and answer share one script context, like Anki's reviewer.
 - `app/` is the UI, drawn in software into two canvases. `3ds/source/main.cpp` shows them on the screens; `host/sim.cpp` runs the same app on a Mac with scripted input.
 - `3ds/source/http_3ds.cpp` does HTTP/HTTPS with mbedTLS and a bundled CA list, because the console's own TLS is too old for modern servers.
 
 ## Known limitations (first draft)
 
-- **JavaScript doesn't run.** Card templates' scripts are ignored, so features like Malleus's one-by-one cloze reveal don't work and buttons are hidden. *Show extra sections* opens the sections Malleus and AnKing templates hide behind buttons. Anki's built-in Image Occlusion masks are drawn without JavaScript. Embedding QuickJS with a small DOM bridge is the planned next step.
+- **JavaScript runs, but there's no pointer.** Scripts run under QuickJS against a small DOM (elements, classes, styles, events, timers, sessionStorage), and ◀ ▶ reach a card's keyboard shortcuts. The card is on the top screen, which isn't touch-sensitive, so buttons inside cards can't be clicked and are hidden; *Show extra sections* opens the sections Malleus and AnKing hide behind buttons. Scripts can be turned off in Settings.
 - **No audio and no typed answers** yet. Undo keeps the last 30 answers of the current session.
 - **"Studied today" counts stay on the 3DS.** Daily new/review limits are tracked locally but aren't sent to the server, so desktop may offer more new cards that day than your limit.
 - **The study order is a re-implementation** of Anki's queue builder. Counts match desktop exactly; the exact order in which cards appear may differ slightly. Each answer is still scheduled exactly as desktop would.
@@ -100,4 +102,4 @@ build/host/anki3ds-cli shot path/to/collection.anki2 <card id> /tmp/card ~/Libra
 
 ## Licences
 
-This project ports logic from Anki (AGPL-3.0-or-later) and is therefore AGPL-3.0-or-later. Bundled third-party code: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence), Mozilla CA bundle (MPL-2.0).
+This project ports logic from Anki (AGPL-3.0-or-later) and is therefore AGPL-3.0-or-later. Bundled third-party code: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence), Mozilla CA bundle (MPL-2.0).

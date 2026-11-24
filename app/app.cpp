@@ -39,12 +39,13 @@ void Settings::load(const std::string& path) {
     auto_media = j.value("auto_media", auto_media);
     reveal_hidden = j.value("reveal_hidden", reveal_hidden);
     tz_auto = j.value("tz_auto", tz_auto);
+    run_scripts = j.value("run_scripts", run_scripts);
 }
 
 void Settings::save(const std::string& path) const {
     json j = {{"endpoint", endpoint}, {"hkey", hkey},       {"username", username},
               {"text_zoom", text_zoom}, {"night", night}, {"auto_media", auto_media},
-              {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}};
+              {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}, {"run_scripts", run_scripts}};
     if (minutes_west) j["minutes_west"] = *minutes_west;
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return;
@@ -578,27 +579,35 @@ void App::next_card() {
     states_ = sched_->scheduling_states(*card_);
     labels_ = sched_->describe_next_states(states_);
     rendered_ = render_card(col_, *card_);
-    CardViewOptions opt;
-    opt.media_dir = media_dir_;
-    opt.text_zoom = settings_.text_zoom;
-    opt.night_mode = settings_.night;
-    opt.reveal_hidden = false;  // extra sections belong to the answer side
-    view_->render(rendered_.question, rendered_.css, rendered_.ord, opt);
     answer_shown_ = false;
+    script_.reset();
+    if (settings_.run_scripts) {
+        script_ = std::make_unique<js::CardScript>();
+        current_html_ = script_->run(rendered_.question, js_storage_);
+    } else {
+        current_html_ = rendered_.question;
+    }
+    render_current();
     scroll_ = 0;
     shown_at_ms_ = pf_.local_clock_ms();
     mode_ = Mode::Review;
     dirty = true;
 }
 
-void App::show_answer() {
+void App::render_current() {
     CardViewOptions opt;
     opt.media_dir = media_dir_;
     opt.text_zoom = settings_.text_zoom;
     opt.night_mode = settings_.night;
-    opt.reveal_hidden = settings_.reveal_hidden;
-    view_->render(rendered_.answer, rendered_.css, rendered_.ord, opt);
+    opt.reveal_hidden = answer_shown_ && settings_.reveal_hidden;  // extra sections belong to the answer side
+    view_->render(current_html_, rendered_.css, rendered_.ord, opt);
+    dirty = true;
+}
+
+void App::show_answer() {
     answer_shown_ = true;
+    current_html_ = script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
+    render_current();
     int anchor = view_->answer_anchor();
     scroll_ = anchor > 60 ? std::min(anchor - 40, max_scroll()) : 0;
     dirty = true;
@@ -699,8 +708,18 @@ void App::on_review(const Input& in) {
         settings_.reveal_hidden = !settings_.reveal_hidden;
         settings_.save(settings_path_);
         int keep = scroll_;
-        show_answer();
+        render_current();
         scroll_ = std::min(keep, max_scroll());
+        return;
+    }
+    // ◀ ▶ go to the card's own keyboard shortcuts (e.g. Malleus one-by-one reveal)
+    if (script_ && (in.down & (K_LEFT | K_RIGHT))) {
+        if (script_->key((in.down & K_RIGHT) ? "ArrowRight" : "ArrowLeft")) {
+            current_html_ = script_->html();
+            int keep = scroll_;
+            render_current();
+            scroll_ = std::min(keep, max_scroll());
+        }
         return;
     }
     auto buttons = review_buttons();
@@ -754,7 +773,7 @@ void App::draw_review() {
                  fit(fonts_, shortname, 13, 170), 13, t.dim);
         }
     }
-    text(bottom, fonts_, 12, 50, "↑↓ / circle pad: scroll   L/R: page", 12, t.dim);
+    text(bottom, fonts_, 12, 50, script_ ? "↑↓ scroll   L/R page   ◀▶ card keys" : "↑↓ / circle pad: scroll   L/R: page", 12, t.dim);
     text(bottom, fonts_, 12, 68, sched_ && sched_->can_undo() ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
     if (max_scroll() > 0 && scroll_ < max_scroll())
         text(bottom, fonts_, 12, 90, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
@@ -780,9 +799,9 @@ void App::draw_done() {
 // ---------------------------------------------------------------- settings
 
 static const char* SETTING_NAMES[] = {"Text size",          "Night mode",        "Time zone",
-                                      "Download images automatically", "Sign in again",
+                                      "Download images automatically", "Run card scripts", "Sign in again",
                                       "Replace this 3DS copy with the server's", "About"};
-static const int SETTING_COUNT = 7;
+static const int SETTING_COUNT = 8;
 
 void App::on_settings(const Input& in) {
     if (in.down & K_DOWN) setting_sel_ = (setting_sel_ + 1) % SETTING_COUNT;
@@ -817,20 +836,23 @@ void App::on_settings(const Input& in) {
             if (delta || activate) settings_.auto_media = !settings_.auto_media;
             break;
         case 4:
-            if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
+            if (delta || activate) settings_.run_scripts = !settings_.run_scripts;
             break;
         case 5:
+            if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
+            break;
+        case 6:
             if (activate) {
                 if (settings_.hkey.empty()) show_message("Not signed in", "Sign in first.", Mode::Settings);
                 else full_download_flow();
             }
             break;
-        case 6:
+        case 7:
             if (activate)
                 show_message("About Anki for 3DS",
                              "An unofficial Anki client. Scheduling is a port of Anki 26.08 (FSRS, load balancer, "
                              "fuzz) verified against the real engine.\n\nUses SQLite, zstd, mbedTLS, litehtml, "
-                             "stb, nanosvg, nlohmann/json and DejaVu fonts (see LICENSES on the SD card).",
+                             "QuickJS, stb, nanosvg, nlohmann/json and DejaVu fonts.",
                              Mode::Settings);
             break;
     }
@@ -855,7 +877,8 @@ void App::draw_settings() {
                 value = "‹ " + fmt_offset(settings_.minutes_west.value_or(0)) + (settings_.tz_auto ? " (auto)" : "") + " ›";
                 break;
             case 3: value = settings_.auto_media ? "On" : "Off"; break;
-            case 4: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
+            case 4: value = settings_.run_scripts ? "On" : "Off"; break;
+            case 5: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
             default: break;
         }
         if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 5, value, 14, tc);
@@ -871,8 +894,12 @@ void App::draw_settings() {
                    "The server refuses syncs if clocks disagree by more than 5 minutes.";
             break;
         case 3: help = "When you open a deck, fetch any of its images that aren't on the SD card yet."; break;
-        case 4: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
-        case 5:
+        case 4:
+            help = "Runs the JavaScript in card templates (for example Malleus one-by-one clozes: press ▶ to reveal "
+                   "the next line, ◀ to hide it). Turn off if a deck's cards misbehave.";
+            break;
+        case 5: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
+        case 6:
             help = "Downloads the whole collection from the sync server again. Reviews on this 3DS that haven't "
                    "been synced will be lost.";
             break;

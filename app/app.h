@@ -2,6 +2,7 @@
 // (3ds/source/main.cpp, host/sim.cpp) feeds input and shows the two canvases.
 #pragma once
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@
 #include "render/fonts.h"
 #include "template.h"
 #include "ui.h"
+#include "js/card_js.h"
 
 namespace anki {
 
@@ -58,6 +60,7 @@ struct Settings {
     bool night = false;
     bool auto_media = true;  // fetch a deck's images when you open it after a sync
     bool reveal_hidden = false;  // show sections templates hide behind JS buttons
+    bool run_scripts = true;     // run card templates' JavaScript (QuickJS)
     void load(const std::string& path);
     void save(const std::string& path) const;
 };
@@ -111,6 +114,10 @@ private:
     SchedulingStates states_;
     std::vector<std::string> labels_;
     RenderedCard rendered_;
+    std::unique_ptr<js::CardScript> script_;
+    std::map<std::string, std::string> js_storage_;  // sessionStorage/localStorage for the session
+    std::string current_html_;
+    void render_current();
     bool answer_shown_ = false;
     int scroll_ = 0;
     int64_t shown_at_ms_ = 0;
