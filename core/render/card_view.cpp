@@ -83,6 +83,96 @@ std::string strip_scripts(const std::string& html) {
     return out;
 }
 
+// Anki's built-in Image Occlusion draws its masks with JavaScript onto a canvas,
+// reading hidden <div class="cloze" data-shape=...> markers. Without JS we move
+// those markers into the image container as absolutely positioned boxes.
+std::string io_fallback(const std::string& html, const std::string& media_dir) {
+    size_t cont = html.find("id=\"image-occlusion-container\"");
+    if (cont == std::string::npos || html.find("data-shape=") == std::string::npos) return html;
+    // natural image size (for older notes that store pixel coordinates)
+    float img_w = 0, img_h = 0;
+    size_t img = html.find("<img", cont);
+    if (img != std::string::npos) {
+        size_t src = html.find("src=\"", img);
+        size_t end = src == std::string::npos ? std::string::npos : html.find('"', src + 5);
+        if (end != std::string::npos) {
+            std::string name = url_decode(html.substr(src + 5, end - src - 5));
+            int w, h, n;
+            if (stbi_info((media_dir + "/" + name).c_str(), &w, &h, &n)) {
+                img_w = (float)w;
+                img_h = (float)h;
+            }
+        }
+    }
+    auto attr = [](const std::string& tag, const char* name) -> std::string {
+        std::string key = std::string(name) + "=\"";
+        size_t p = tag.find(key);
+        if (p == std::string::npos) return "";
+        size_t e = tag.find('"', p + key.size());
+        return e == std::string::npos ? "" : tag.substr(p + key.size(), e - p - key.size());
+    };
+    std::string shapes;
+    std::string out;
+    size_t i = 0;
+    while (true) {
+        size_t p = html.find("<div class=\"cloze", i);
+        if (p == std::string::npos) break;
+        size_t e = html.find("</div>", p);
+        if (e == std::string::npos) break;
+        std::string tag = html.substr(p, html.find('>', p) - p + 1);
+        if (tag.find("data-shape=") == std::string::npos) {
+            out += html.substr(i, e + 6 - i);
+            i = e + 6;
+            continue;
+        }
+        out += html.substr(i, p - i);
+        i = e + 6;
+        std::string shape = attr(tag, "data-shape");
+        std::string cls = tag.find("cloze-inactive") != std::string::npos ? "io-inactive"
+                          : tag.find("cloze-highlight") != std::string::npos ? "io-highlight"
+                                                                             : "io-active";
+        float l = 0, t = 0, w = 0, h = 0;
+        auto num = [&](const char* n) { std::string v = attr(tag, n); return v.empty() ? 0.0f : (float)atof(v.c_str()); };
+        if (shape == "rect" || shape == "text") {
+            l = num("data-left"); t = num("data-top"); w = num("data-width"); h = num("data-height");
+        } else if (shape == "ellipse") {
+            l = num("data-left"); t = num("data-top"); w = 2 * num("data-rx"); h = 2 * num("data-ry");
+        } else if (shape == "polygon") {
+            std::string pts = attr(tag, "data-points");
+            float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+            const char* c = pts.c_str();
+            while (*c) {
+                char* endp;
+                float x = strtof(c, &endp);
+                if (endp == c) { c++; continue; }
+                c = endp;
+                while (*c == ',' || *c == ' ') c++;
+                float y = strtof(c, &endp);
+                if (endp == c) break;
+                c = endp;
+                while (*c == ' ') c++;
+                minx = std::min(minx, x); maxx = std::max(maxx, x);
+                miny = std::min(miny, y); maxy = std::max(maxy, y);
+            }
+            if (maxx >= minx) { l = minx; t = miny; w = maxx - minx; h = maxy - miny; }
+        }
+        bool normalized = l <= 1.0f && t <= 1.0f && w <= 1.0f && h <= 1.0f;
+        if (!normalized) {
+            if (img_w <= 0) continue;
+            l /= img_w; w /= img_w; t /= img_h; h /= img_h;
+        }
+        char style[200];
+        snprintf(style, sizeof style, "left:%.3f%%;top:%.3f%%;width:%.3f%%;height:%.3f%%%s", l * 100, t * 100, w * 100,
+                 h * 100, shape == "ellipse" ? ";border-radius:50%" : "");
+        if (shape != "text") shapes += "<div class=\"io-mask " + cls + "\" style=\"" + style + "\"></div>";
+    }
+    out += html.substr(i);
+    size_t canvas = out.find("<canvas id=\"image-occlusion-canvas\"");
+    if (canvas == std::string::npos) canvas = out.find("</div>", out.find("id=\"image-occlusion-container\""));
+    if (canvas != std::string::npos) out.insert(canvas, shapes);
+    return out;
+}
+
 // Base styles: what Anki's reviewer adds around every card.
 const char* BASE_CSS = R"CSS(
 html { background: #ffffff; }
@@ -97,6 +187,13 @@ sub, sup { font-size: 75%; }
 .mjx { white-space: nowrap; }
 .mjx-frac sup, .mjx-frac sub { font-size: 75%; }
 a { color: #1a5fb4; text-decoration: none; }
+#image-occlusion-container { position: relative; display: inline-block; }
+#image-occlusion-container img { display: block; max-width: 100%; }
+#image-occlusion-canvas { display: none; }
+.io-mask { position: absolute; border: 1px solid #212121; }
+.io-active { background-color: #ff8e8e; }
+.io-inactive { background-color: #ffeba2; }
+.io-highlight { background-color: transparent; border: 2px solid #ff8e8e; }
 )CSS";
 
 // Applied after the note type's CSS: controls that only work with JavaScript.
@@ -378,7 +475,7 @@ static void find_answer_anchor(const element::ptr& el, int& y) {
 void CardView::render(const std::string& body_html, const std::string& css, int ord, const CardViewOptions& opt) {
     container_->opt = opt;
     container_->handles.clear();
-    std::string body = render_mathjax_in_html(strip_scripts(body_html));
+    std::string body = render_mathjax_in_html(io_fallback(strip_scripts(body_html), opt.media_dir));
     std::string doc_html = "<html><head><style>" + std::string(BASE_CSS) + css + COMPAT_CSS +
                            (opt.night_mode ? std::string(NIGHT_CSS) : std::string()) +
                            "</style></head><body class=\"card card" + std::to_string(ord + 1) +
