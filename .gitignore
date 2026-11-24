@@ -1,0 +1,8 @@
+build/
+tools/.venv/
+*.anki2
+*.anki2-*
+*.3dsx
+*.smdh
+*.elf
+.DS_Store
