@@ -276,6 +276,10 @@ public:
                 const SchedulingStates* precomputed = nullptr);
     // Human-readable button labels ("10m", "3d", "1.2mo").
     std::vector<std::string> describe_next_states(const SchedulingStates& s);
+    // Reverts the most recent answer (card, buried siblings, leech tag, review log).
+    // Returns the card id that was undone.
+    std::optional<int64_t> undo(std::string& err);
+    bool can_undo() const { return !undo_.empty(); }
 
     bool fsrs_enabled() const { return fsrs_; }
 
@@ -285,6 +289,13 @@ private:
     Collection& col_;
     bool fsrs_ = false, short_term_with_steps_ = false;
     std::unique_ptr<LoadBalancer> lb_;
+    struct UndoEntry {
+        std::vector<Card> siblings;  // every card of the note, as before the answer
+        std::optional<Note> note;
+        int64_t revlog_id = 0;
+        int64_t card_id = 0;
+    };
+    std::vector<UndoEntry> undo_;
 
     bool make_updater(const Card& card, Updater& u, std::string& err);
 };

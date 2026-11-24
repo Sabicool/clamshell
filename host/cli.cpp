@@ -140,8 +140,10 @@ int main(int argc, char** argv) {
     if (cmd == "decks") {
         auto t = col.timing_today();
         printf("today=%u next_day_at=%lld\n", t.days_elapsed, (long long)t.next_day_at);
+        bool fast = argc > 3 && std::string(argv[3]) == "--fast";
+        auto all = all_deck_counts(col);
         for (const auto& [id, d] : col.decks) {
-            DeckCounts c = deck_counts(col, id);
+            DeckCounts c = fast ? all[id] : deck_counts(col, id);
             printf("%lld\t%s\tnew=%u learn=%u review=%u\n", (long long)id, d.human_name().c_str(), c.new_count,
                    c.learn_count, c.review_count);
         }
@@ -187,6 +189,26 @@ int main(int argc, char** argv) {
             n++;
         }
         fprintf(stderr, "answered %d\n", n);
+        return 0;
+    }
+    if (cmd == "undotest") {
+        // answers the given card ids (cycling Again/Good/Easy/Hard), then undoes them all
+        Scheduler sched(col);
+        sched.start_session(true);
+        std::string line;
+        int n = 0;
+        const Rating cycle[] = {Rating::Again, Rating::Good, Rating::Easy, Rating::Hard};
+        while (std::getline(std::cin, line)) {
+            if (line.empty()) continue;
+            if (!sched.answer(std::stoll(line), cycle[n % 4], 3000, err)) {
+                fprintf(stderr, "answer failed: %s\n", err.c_str());
+                return 1;
+            }
+            n++;
+        }
+        int u = 0;
+        while (sched.can_undo() && sched.undo(err)) u++;
+        printf("answered %d, undid %d\n", n, u);
         return 0;
     }
     if (cmd == "queue") {

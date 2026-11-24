@@ -325,6 +325,15 @@ void StudyQueue::on_answered(const Card& c) {
     }
 }
 
+void StudyQueue::push_front(const QueuedCard& q) {
+    learning_.erase(std::remove_if(learning_.begin(), learning_.end(),
+                                   [&](const auto& p) { return p.second == q.card_id; }),
+                    learning_.end());
+    main_.erase(std::remove_if(main_.begin(), main_.end(), [&](const QueuedCard& x) { return x.card_id == q.card_id; }),
+                main_.end());
+    main_.push_front(q);
+}
+
 DeckCounts StudyQueue::counts() const {
     DeckCounts d;
     d.learn_count = (uint32_t)learning_.size();

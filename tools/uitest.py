@@ -41,6 +41,8 @@ shot 07-next-question
 key A
 key B
 shot 08-after-again
+key SELECT
+shot 08b-after-undo
 key START
 shot 09-decks-after
 key X

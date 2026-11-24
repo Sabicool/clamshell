@@ -779,6 +779,19 @@ public:
         return mods;
     }
 
+    void remove_card(int64_t cid) {
+        for (auto& [_, days] : days_by_preset)
+            for (auto& day : days) {
+                auto it = std::find_if(day.cards.begin(), day.cards.end(), [&](auto& p) { return p.first == cid; });
+                if (it == day.cards.end()) continue;
+                int64_t nid = it->second;
+                std::swap(*it, day.cards.back());
+                day.cards.pop_back();
+                bool still = std::any_of(day.cards.begin(), day.cards.end(), [&](auto& p) { return p.second == nid; });
+                if (!still) day.notes.erase(nid);
+            }
+    }
+
     void add_card(int64_t cid, int64_t nid, int64_t dcid, uint32_t interval) {
         auto it = days_by_preset.find(dcid);
         if (it == days_by_preset.end()) return;
@@ -1162,8 +1175,23 @@ bool Scheduler::answer(int64_t card_id, Rating rating, uint32_t millis_taken, st
     e.time = millis_taken;
     e.type = (int)rp.kind;
 
+    UndoEntry undo;
+    undo.card_id = c.id;
+    {
+        std::string sql = std::string("select ") + CARD_COLS + " from cards where nid = ?";
+        Stmt s(col_.db(), sql.c_str());
+        s.bind(1, c.nid);
+        while (s.step()) undo.siblings.push_back(card_from_row(s));
+    }
+    undo.note = col_.get_note(c.nid);
+
     col_.begin();
     col_.add_revlog(e, true);
+    {
+        Stmt s(col_.db(), "select max(id) from revlog where cid = ?");
+        s.bind(1, c.id);
+        if (s.step()) undo.revlog_id = s.i64(0);
+    }
     // bury siblings
     {
         bool bury_new = u.config->bury_new, bury_rev = u.config->bury_reviews, bury_il = u.config->bury_interday_learning;
@@ -1212,7 +1240,30 @@ bool Scheduler::answer(int64_t card_id, Rating rating, uint32_t millis_taken, st
     col_.set_modified();
     col_.commit();
     if (lb_ && c.queue == Q_REVIEW) lb_->add_card(c.id, c.nid, u.home->config_id, c.ivl);
+    undo_.push_back(std::move(undo));
+    if (undo_.size() > 30) undo_.erase(undo_.begin());
     return true;
+}
+
+std::optional<int64_t> Scheduler::undo(std::string& err) {
+    if (undo_.empty()) {
+        err = "nothing to undo";
+        return std::nullopt;
+    }
+    UndoEntry u = std::move(undo_.back());
+    undo_.pop_back();
+    col_.begin();
+    for (const Card& c : u.siblings) col_.update_card(c);
+    if (u.note) col_.update_note(*u.note);
+    if (u.revlog_id) {
+        Stmt s(col_.db(), "delete from revlog where id = ?");
+        s.bind(1, u.revlog_id);
+        s.step();
+    }
+    col_.set_modified();
+    col_.commit();
+    if (lb_) lb_->remove_card(u.card_id);
+    return u.card_id;
 }
 
 // ---------------------------------------------------------------- display

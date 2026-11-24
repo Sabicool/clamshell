@@ -39,7 +39,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 | Screen | Controls |
 |---|---|
 | Deck list | ↑↓ choose, ◀▶ collapse/expand, L/R page, **A** study, **X** sync, **Y** download images for the deck, **SELECT** settings, **START** quit |
-| Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, **START** back to decks |
+| Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, **SELECT** undo last answer, **START** back to decks |
 | Answer | **B** Again, **Y** Hard, **A** Good, **X** Easy (or tap the buttons) |
 | Settings | ↑↓ choose, ◀▶ change, **A** select, **B** back |
 
@@ -55,7 +55,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 ## Known limitations (first draft)
 
 - **JavaScript doesn't run.** Card templates' scripts are ignored, so features like Malleus's one-by-one cloze reveal and tap-to-show hint buttons don't work; buttons and inputs are hidden. Embedding QuickJS with a small DOM bridge is the planned next step.
-- **No audio, no typed answers, no undo** yet.
+- **No audio and no typed answers** yet. Undo keeps the last 30 answers of the current session.
 - **"Studied today" counts stay on the 3DS.** Daily new/review limits are tracked locally but aren't sent to the server, so desktop may offer more new cards that day than your limit.
 - **The study order is a re-implementation** of Anki's queue builder. Counts match desktop exactly; the exact order in which cards appear may differ slightly. Each answer is still scheduled exactly as desktop would.
 - **Cards that have never had FSRS memory states computed** (rare; usually suspended cards from before FSRS was turned on) show an error when answered. Opening the deck options on desktop and saving recomputes them.

@@ -186,6 +186,10 @@ bool App::frame(const Input& in) {
             break;
         case Mode::Review: on_review(in); break;
         case Mode::Done:
+            if ((in.down & K_SELECT) && sched_ && sched_->can_undo()) {
+                undo();
+                break;
+            }
             if (in.down & (K_A | K_B | K_START) || in.touch_down) {
                 build_rows();
                 mode_ = Mode::Decks;
@@ -590,14 +594,49 @@ void App::answer(Rating r) {
     std::string err;
     int original_queue = card_->queue;
     int64_t did = card_->did;
+    // remember the deck counters so undo can put them back
+    std::vector<std::pair<int64_t, std::string>> saved;
+    {
+        std::vector<int64_t> ids{did};
+        for (int64_t p : col_.parent_deck_ids(did)) ids.push_back(p);
+        for (int64_t id : ids)
+            if (const Deck* d = col_.deck(id)) saved.push_back({id, d->common.encode()});
+    }
     if (!sched_->answer(card_->id, r, millis, err, &states_)) {
         show_message("Couldn't save the answer", err, Mode::Decks);
         return;
     }
+    deck_undo_.push_back(saved);
+    if (deck_undo_.size() > 30) deck_undo_.erase(deck_undo_.begin());
     record_studied(col_, did, original_queue == Q_NEW, original_queue == Q_REVIEW || original_queue == Q_DAY_LEARN,
                    millis);
     if (auto updated = col_.get_card(card_->id)) queue_->on_answered(*updated);
     reviewed_++;
+    next_card();
+}
+
+void App::undo() {
+    if (!sched_ || !sched_->can_undo()) return;
+    std::string err;
+    auto cid = sched_->undo(err);
+    if (!cid) return;
+    if (!deck_undo_.empty()) {
+        for (auto& [id, blob] : deck_undo_.back()) {
+            auto it = col_.decks.find(id);
+            if (it == col_.decks.end()) continue;
+            it->second.common = pb::Message(blob);
+            Stmt s(col_.db(), "update decks set common = ? where id = ?");
+            s.bind_blob(1, blob).bind(2, id);
+            s.step();
+        }
+        deck_undo_.pop_back();
+    }
+    if (reviewed_ > 0) reviewed_--;
+    queue_->build();
+    auto c = col_.get_card(*cid);
+    std::string kind = !c ? "review" : c->queue == Q_NEW ? "new" : c->queue == Q_REVIEW ? "review" : "learn";
+    queue_->push_front({*cid, kind});
+    status_ = "Undid the last answer";
     next_card();
 }
 
@@ -633,6 +672,10 @@ void App::on_review(const Input& in) {
     if (in.down & K_START) {
         build_rows();
         mode_ = Mode::Decks;
+        return;
+    }
+    if (in.down & K_SELECT) {
+        undo();
         return;
     }
     auto buttons = review_buttons();
@@ -687,7 +730,7 @@ void App::draw_review() {
         }
     }
     text(bottom, fonts_, 12, 50, "↑↓ / circle pad: scroll   L/R: page", 12, t.dim);
-    text(bottom, fonts_, 12, 68, "START: back to decks", 12, t.dim);
+    text(bottom, fonts_, 12, 68, sched_ && sched_->can_undo() ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
     if (max_scroll() > 0 && scroll_ < max_scroll())
         text(bottom, fonts_, 12, 92, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
     for (auto& b : review_buttons()) button(bottom, fonts_, b, settings_.night);

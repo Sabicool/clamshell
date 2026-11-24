@@ -143,6 +143,8 @@ private:
     void next_card();
     void show_answer();
     void answer(Rating r);
+    void undo();
+    std::vector<std::vector<std::pair<int64_t, std::string>>> deck_undo_;  // deck common blobs before each answer
     void show_message(const std::string& title, const std::string& body, Mode ret);
     std::vector<ui::Button> review_buttons();
     int max_scroll() const;

@@ -29,6 +29,7 @@ public:
     std::optional<QueuedCard> next();          // card to show now (learning cards when due)
     std::optional<QueuedCard> peek(size_t i);  // for debugging: i-th card of the combined order
     void on_answered(const Card& updated);     // remove/requeue after an answer
+    void push_front(const QueuedCard& q);      // show this card next (used by undo)
     DeckCounts counts() const;
 
 private:
