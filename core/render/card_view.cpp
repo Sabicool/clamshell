@@ -188,6 +188,7 @@ std::string io_fallback(const std::string& html, const std::string& media_dir) {
 // Base styles: what Anki's reviewer adds around every card.
 const char* BASE_CSS = R"CSS(
 html { background: #ffffff; }
+[hidden] { display: none !important; }
 body { margin: 6px; overflow-wrap: break-word; }
 .card { font-family: sans-serif; font-size: 20px; text-align: center; color: black; background-color: white; }
 img { max-width: 100%; height: auto; }
@@ -305,6 +306,7 @@ public:
                 else stbi_image_free(data);
             }
         }
+        if (!img && getenv("ANKI3DS_DEBUG_IMG")) fprintf(stderr, "image failed: %s\n", name.c_str());
         images[src] = img;
         return img;
     }
@@ -514,7 +516,9 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
     container_->opt = opt;
     container_->handles.clear();
     std::string body = render_mathjax_in_html(io_fallback(strip_scripts(body_html), opt.media_dir));
-    std::string doc_html = "<html><head><style>" + std::string(BASE_CSS) + css + COMPAT_CSS +
+    if (body.compare(0, 13, "<div id=\"qa\">") != 0) body = "<div id=\"qa\">" + body + "</div>";
+    // "mobile" like AnkiDroid/AnkiMobile, so templates use their small-screen layout
+    std::string doc_html = "<html class=\"mobile\"><head><style>" + std::string(BASE_CSS) + css + COMPAT_CSS +
                            (opt.reveal_hidden ? std::string(REVEAL_CSS) : std::string()) +
                            (opt.night_mode ? std::string(NIGHT_CSS) : std::string()) +
                            "</style></head><body class=\"card card" + std::to_string(ord + 1) +

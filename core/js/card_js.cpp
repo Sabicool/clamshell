@@ -374,7 +374,9 @@ std::string CardScript::run(const std::string& body_html, std::map<std::string, 
     log_.clear();
     storage_ = &storage;
     Impl& m = *impl_;
-    m.dom.parse(body_html);
+    // Anki's reviewer puts the card inside <div id="qa">; templates rely on it.
+    m.dom.parse("<div id=\"qa\">" + body_html + "</div>");
+    m.dom.html()->set_attr("class", "mobile");
     m.rt = JS_NewRuntime();
     JS_SetMemoryLimit(m.rt, 24 * 1024 * 1024);
     JS_SetMaxStackSize(m.rt, 256 * 1024);
@@ -437,7 +439,9 @@ void CardScript::run_scripts(bool first) {
 
 std::string CardScript::show_answer(const std::string& body_html) {
     if (!impl_ || !impl_->ctx) return body_html;
-    impl_->dom.set_inner_html(impl_->dom.body(), body_html);
+    Node* qa = impl_->dom.by_id("qa");
+    if (!qa) qa = impl_->dom.body();
+    impl_->dom.set_inner_html(qa, body_html);
     run_scripts(false);
     return impl_->dom.body_html();
 }
