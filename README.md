@@ -2,7 +2,7 @@
 
 An unofficial Anki client for the New Nintendo 3DS (homebrew). It reviews your real Anki collection with the same FSRS scheduling as desktop Anki, renders cards' HTML and CSS (including tables, images, image occlusion masks and simple MathJax), runs card templates' JavaScript, and syncs with an Anki sync server.
 
-Status: first draft. Everything below "Verified" was tested on a Mac against the real Anki 26.08 engine; nothing has run on 3DS hardware yet.
+Status: first draft. Everything below "Verified" was tested on a Mac against the real Anki 26.08 engine, and the real 3DS build has run end to end in the Azahar emulator; nothing has run on 3DS hardware yet.
 
 ## Verified on the Mac
 
@@ -14,6 +14,7 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 - **The app's screens and flows** run in a desktop simulator (`tools/uitest.py`): sign in, download, deck list, study, answer, sync, settings. Screenshots go to `build/ui-shots/`.
 - **The 3DS network code** (`3ds/source/http_3ds.cpp`: sockets, mbedTLS, chunked downloads) was compiled for the Mac with a small shim and passed the same sync test, including the 76 MB collection download. Its TLS accepts valid certificates and rejects expired or wrong-host ones.
 - The 3DS build (`make -C 3ds`) compiles and links with devkitARM r68.
+- **The real 3DS build runs in the Azahar emulator** (`tools/emutest.py`): it signs in to a local sync server, downloads a copy of a 17,000-card collection (76 MB), opens Malleus, renders and answers four cards, syncs, and the four reviews arrive on desktop. Screenshots come from the emulated framebuffer into `build/emu-shots/`. In the emulator, answering a card takes about 0.5–1 s, opening Malleus about 12 s (mostly checking which images are missing) and a sync about 4 s. Emulator timing is only a rough guide to hardware.
 
 ## Important: AnkiWeb
 
@@ -92,6 +93,12 @@ tools/.venv/bin/python tools/uitest.py
 
 ```bash
 make -C 3ds
+```
+
+Run the 3DS build in Azahar (portable mode: a `user` folder next to `Azahar.app`) against a throwaway sync server with a copy of a collection:
+
+```bash
+make -C 3ds selftest && tools/.venv/bin/python tools/emutest.py path/to/Azahar.app path/to/collection.anki2
 ```
 
 Render a card to PNG with the 3DS renderer:
