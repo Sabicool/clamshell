@@ -62,10 +62,10 @@ Remaining remaining_for(Collection& col, const Deck& d, uint32_t today, bool new
     new_limit -= new_today;
     if (!new_ignores_review) {
         review_limit -= new_today;
-        new_limit = std::min(new_limit, review_limit);
+        new_limit = std::min<int32_t>(new_limit, review_limit);
     }
-    r.review = (uint32_t)std::max(review_limit, 0);
-    r.newc = (uint32_t)std::max(new_limit, 0);
+    r.review = (uint32_t)std::max<int32_t>(review_limit, 0);
+    r.newc = (uint32_t)std::max<int32_t>(new_limit, 0);
     r.cap_new_to_review = !new_ignores_review;
     return r;
 }
