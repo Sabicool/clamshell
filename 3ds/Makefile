@@ -39,7 +39,7 @@ CORE_SRC := $(wildcard $(ROOT)/core/*.cpp $(ROOT)/core/render/*.cpp $(ROOT)/core
 LH_SRC := $(wildcard $(TP)/litehtml/src/*.cpp)
 GUMBO_SRC := $(wildcard $(TP)/litehtml/src/gumbo/*.c)
 QJS_SRC := $(wildcard $(TP)/quickjs/*.c)
-WEBP_SRC := $(wildcard $(TP)/libwebp/src/dec/*.c $(TP)/libwebp/src/dsp/*.c $(TP)/libwebp/src/utils/*.c)
+WEBP_SRC := $(wildcard $(TP)/libwebp/src/dec/*.c $(TP)/libwebp/src/dsp/*.c $(TP)/libwebp/src/utils/*.c $(TP)/libwebp/src/demux/*.c)
 ZSTD_SRC := $(wildcard $(TP)/zstd/common/*.c $(TP)/zstd/compress/*.c $(TP)/zstd/decompress/*.c)
 MBED_SRC := $(filter-out %/net_sockets.c %/timing.c,$(wildcard $(TP)/mbedtls/library/*.c))
 

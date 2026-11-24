@@ -52,6 +52,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 - `core/states.cpp`, `core/fsrs.cpp`, `core/rng.cpp` are close ports of Anki 26.08's `rslib/src/scheduler/states`, the `fsrs` 6.6.1 crate's inference code, and the parts of Rust's `rand` 0.9 that Anki uses for fuzz and load balancing, so random choices are bit-identical.
 - `core/sync.cpp` implements sync protocol v11 (zstd-compressed JSON over HTTP POST). It never does a full upload; if a full sync is needed it only offers to download.
 - `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml), draws text with stb_truetype and the DejaVu fonts, decodes images with stb_image (PNG, JPEG, GIF), libwebp (WebP, used heavily by Malleus) and nanosvg (SVG, e.g. occlusion masks), and turns `\(...\)` MathJax into Unicode/HTML.
+- Cards are presented like a phone client (`<div id="qa">` wrapper, `mobile` class), so templates such as AnKing's use their small-screen layout.
 - `core/js/` runs template JavaScript with [QuickJS-ng](https://github.com/quickjs-ng/quickjs) against a gumbo-parsed DOM, then hands the resulting HTML to the renderer. Question and answer share one script context, like Anki's reviewer.
 - `app/` is the UI, drawn in software into two canvases. `3ds/source/main.cpp` shows them on the screens; `host/sim.cpp` runs the same app on a Mac with scripted input.
 - `3ds/source/http_3ds.cpp` does HTTP/HTTPS with mbedTLS and a bundled CA list, because the console's own TLS is too old for modern servers.
@@ -59,7 +60,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 ## Known limitations (first draft)
 
 - **JavaScript runs, but there's no pointer.** Scripts run under QuickJS against a small DOM (elements, classes, styles, events, timers, sessionStorage), and ◀ ▶ reach a card's keyboard shortcuts. The card is on the top screen, which isn't touch-sensitive, so buttons inside cards can't be clicked and are hidden; *Show extra sections* opens the sections Malleus and AnKing hide behind buttons. Scripts can be turned off in Settings.
-- **No audio and no typed answers** yet. Undo keeps the last 30 answers of the current session.
+- **No audio and no typed answers** yet; animated GIF/WebP images show their first frame. Undo keeps the last 30 answers of the current session.
 - **Cards that have never had FSRS memory states computed** (rare; usually suspended cards from before FSRS was turned on) show an error when answered. Opening the deck options on desktop and saving recomputes them.
 - **Filtered decks** work for rescheduling decks; preview decks are untested.
 - MathJax support is an approximation (symbols, Greek, sub/superscripts, fractions, roots, `\ce{}`); complex layouts show as plain text.

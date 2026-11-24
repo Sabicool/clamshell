@@ -24,6 +24,7 @@
 #include "nanosvg/nanosvg.h"
 #include "nanosvg/nanosvgrast.h"
 #include "webp/decode.h"
+#include "webp/demux.h"
 
 namespace anki {
 
@@ -275,6 +276,26 @@ public:
                                 memcmp(buf.data(), "RIFF", 4) == 0 && memcmp(buf.data() + 8, "WEBP", 4) == 0) {
                                 data = WebPDecodeRGBA(buf.data(), buf.size(), &w, &h);
                                 webp = data != nullptr;
+                                if (!data) {
+                                    // animated WebP: show the first frame
+                                    WebPData wd{buf.data(), buf.size()};
+                                    WebPAnimDecoderOptions o;
+                                    WebPAnimDecoderOptionsInit(&o);
+                                    o.color_mode = MODE_RGBA;
+                                    if (WebPAnimDecoder* dec = WebPAnimDecoderNew(&wd, &o)) {
+                                        WebPAnimInfo info;
+                                        uint8_t* frame = nullptr;
+                                        int ts = 0;
+                                        if (WebPAnimDecoderGetInfo(dec, &info) && WebPAnimDecoderGetNext(dec, &frame, &ts)) {
+                                            w = (int)info.canvas_width;
+                                            h = (int)info.canvas_height;
+                                            data = (unsigned char*)malloc((size_t)w * h * 4);
+                                            memcpy(data, frame, (size_t)w * h * 4);
+                                            svg = true;  // free() with free(), like the SVG path
+                                        }
+                                        WebPAnimDecoderDelete(dec);
+                                    }
+                                }
                             }
                         }
                         fclose(f);
