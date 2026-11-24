@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#ifndef __3DS__
+#if !defined(__3DS__) || defined(ANKI3DS_SELFTEST)
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 #endif
@@ -117,7 +117,7 @@ void Canvas::draw_image(const Image& img, int dx, int dy, int dw, int dh) {
 }
 
 bool Canvas::save_png(const std::string& path) const {
-#ifndef __3DS__
+#if !defined(__3DS__) || defined(ANKI3DS_SELFTEST)
     std::vector<uint8_t> rgb((size_t)w_ * h_ * 3);
     for (size_t i = 0; i < px_.size(); i++) {
         rgb[i * 3] = (px_[i] >> 16) & 255;

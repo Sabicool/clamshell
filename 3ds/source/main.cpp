@@ -103,8 +103,133 @@ public:
     }
 };
 
+#ifdef ANKI3DS_SELFTEST
+// Reads the framebuffer back (undoing the rotation) so screenshots show what
+// the console actually displays.
+Canvas readback(gfxScreen_t screen, int sw) {
+    u16 fbw, fbh;
+    u8* fb = gfxGetFramebuffer(screen, GFX_LEFT, &fbw, &fbh);
+    Canvas c(sw, 240);
+    for (int x = 0; x < sw; x++)
+        for (int y = 0; y < 240; y++) {
+            u8* d = fb + ((size_t)x * fbw + (fbw - 1 - y)) * 3;
+            c.data()[(size_t)y * sw + x] = rgba(d[2], d[1], d[0]);
+        }
+    return c;
+}
+
+class SelftestPlatform : public Platform3ds {
+public:
+    std::vector<std::string> typed;
+    bool keyboard(const std::string&, const std::string&, bool, std::string& out) override {
+        if (typed.empty()) return false;
+        out = typed.front();
+        typed.erase(typed.begin());
+        return true;
+    }
+};
+#endif
+
 }  // namespace
 
+#ifdef ANKI3DS_SELFTEST
+// Runs sdmc:/3ds/anki3ds/selftest.txt (same commands as host/sim.cpp) and
+// writes screenshots + selftest.log, then exits.
+int main() {
+    osSetSpeedupEnable(true);
+    gfxInitDefault();
+    romfsInit();
+    psInit();
+    acInit();
+    SelftestPlatform pf;
+    std::string dir = pf.data_dir();
+    App app(pf);
+    app.init();
+    FILE* log = fopen((dir + "/selftest.log").c_str(), "w");
+    auto logf = [&](const std::string& s) {
+        if (log) { fprintf(log, "%s\n", s.c_str()); fflush(log); }
+    };
+    auto show = [&]() {
+        blit(app.top, GFX_TOP);
+        blit(app.bottom, GFX_BOTTOM);
+        gfxFlushBuffers();
+        gfxSwapBuffers();
+        gspWaitForVBlank();
+    };
+    Input idle;
+    app.frame(idle);
+    show();
+    logf("started");
+    FILE* sf = fopen((dir + "/selftest.txt").c_str(), "r");
+    char linebuf[512];
+    struct K { const char* n; uint32_t k; } keys[] = {{"A", K_A}, {"B", K_B}, {"X", K_X}, {"Y", K_Y}, {"L", K_L}, {"R", K_R},
+        {"UP", K_UP}, {"DOWN", K_DOWN}, {"LEFT", K_LEFT}, {"RIGHT", K_RIGHT}, {"START", K_START}, {"SELECT", K_SELECT}, {"ZR", K_ZR}};
+    auto keyof = [&](const std::string& n) -> uint32_t { for (auto& k : keys) if (n == k.n) return k.k; return 0; };
+    while (sf && fgets(linebuf, sizeof linebuf, sf) && aptMainLoop()) {
+        std::string line = linebuf;
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        std::string cmd = line.substr(0, line.find(' '));
+        std::string arg = line.find(' ') == std::string::npos ? "" : line.substr(line.find(' ') + 1);
+        u64 t0 = osGetTime();
+        if (cmd == "key") {
+            Input in;
+            in.down = in.held = keyof(arg);
+            app.frame(in);
+            show();
+            app.frame(idle);
+            show();
+        } else if (cmd == "hold") {
+            std::string k = arg.substr(0, arg.find(' '));
+            int n = atoi(arg.substr(arg.find(' ') + 1).c_str());
+            for (int i = 0; i < n; i++) {
+                Input in;
+                in.held = keyof(k);
+                app.frame(in);
+                show();
+            }
+        } else if (cmd == "touch") {
+            Input in;
+            sscanf(arg.c_str(), "%d %d", &in.tx, &in.ty);
+            in.touch_down = in.touching = true;
+            app.frame(in);
+            show();
+            app.frame(idle);
+            show();
+        } else if (cmd == "type") {
+            pf.typed.push_back(arg);
+        } else if (cmd == "select") {
+            app.debug_select(arg);
+            app.frame(idle);
+            show();
+        } else if (cmd == "frames") {
+            for (int i = 0; i < atoi(arg.c_str()); i++) { app.frame(idle); show(); }
+        } else if (cmd == "shot") {
+            app.dirty = true;
+            app.frame(idle);
+            show();
+            show();  // both buffers now hold this frame
+            Canvas top = readback(GFX_TOP, 400), bot = readback(GFX_BOTTOM, 320);
+            Canvas out(400, 490, rgba(40, 40, 46));
+            for (int y = 0; y < 240; y++)
+                for (int x = 0; x < 400; x++) out.data()[(size_t)y * 400 + x] = top.data()[(size_t)y * 400 + x];
+            for (int y = 0; y < 240; y++)
+                for (int x = 0; x < 320; x++) out.data()[(size_t)(y + 250) * 400 + x + 40] = bot.data()[(size_t)y * 320 + x];
+            out.save_png(dir + "/shot-" + arg + ".png");
+        }
+        logf(line + "  (" + std::to_string(osGetTime() - t0) + " ms)");
+    }
+    if (sf) fclose(sf);
+    logf("done");
+    if (log) fclose(log);
+    pf.net_down();
+    acExit();
+    psExit();
+    romfsExit();
+    gfxExit();
+    return 0;
+}
+#else
 int main() {
     osSetSpeedupEnable(true);  // New 3DS: 804 MHz + extra cache
     gfxInitDefault();
@@ -178,3 +303,4 @@ int main() {
     gfxExit();
     return 0;
 }
+#endif

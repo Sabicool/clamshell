@@ -73,6 +73,9 @@ App::~App() = default;
 
 void App::init() {
     std::string dir = pf_.data_dir();
+    // create every missing parent (sdmc:/3ds may not exist on a fresh card)
+    for (size_t i = dir.find('/', dir.find(':') + 2); i != std::string::npos; i = dir.find('/', i + 1))
+        mkdir(dir.substr(0, i).c_str(), 0755);
     mkdir(dir.c_str(), 0755);
     col_path_ = dir + "/collection.anki2";
     media_dir_ = dir + "/collection.media";

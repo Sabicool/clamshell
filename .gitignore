@@ -7,3 +7,4 @@ tools/.venv/
 *.elf
 .DS_Store
 server-data/
+build-*/

@@ -21,7 +21,7 @@ APP_AUTHOR := anki-3ds
 
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 # -ffp-contract=off keeps float rounding identical to desktop Anki's scheduler.
-COMMON := -MMD -MP -O2 -g -mword-relocations -ffunction-sections -fdata-sections -ffp-contract=off $(ARCH) -D__3DS__ \
+COMMON := $(EXTRA_FLAGS) -MMD -MP -O2 -g -mword-relocations -ffunction-sections -fdata-sections -ffp-contract=off $(ARCH) -D__3DS__ \
 	-I$(DEVKITPRO)/libctru/include -I$(ROOT)/app -I$(ROOT)/core -I$(ROOT)/core/render -I$(ROOT)/core/js -I$(TP)/quickjs -I$(TP)/libwebp/src -I$(TP)/libwebp -I$(TP) -I$(TP)/sqlite -I$(TP)/zstd \
 	-I$(TP)/litehtml/include -I$(TP)/litehtml/include/litehtml \
 	-I$(TP)/litehtml/src/gumbo/include -I$(TP)/litehtml/src/gumbo/include/gumbo \
@@ -48,6 +48,10 @@ OBJS := $(call obj,$(APP_SRC)) $(call obj,$(CORE_SRC)) $(call obj,$(LH_SRC)) $(c
 	$(call obj,$(QJS_SRC)) $(call obj,$(WEBP_SRC)) $(call obj,$(ZSTD_SRC)) $(call obj,$(MBED_SRC)) $(BUILD)/third_party/sqlite/sqlite3.c.o
 
 all: $(TARGET).3dsx
+
+# Self-test build for emulator runs: make -C 3ds selftest
+selftest:
+	$(MAKE) BUILD=build-selftest TARGET=anki3ds-selftest EXTRA_FLAGS=-DANKI3DS_SELFTEST
 
 $(BUILD)/source/%.cpp.o: source/%.cpp
 	@mkdir -p $(dir $@)
@@ -96,6 +100,6 @@ $(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh $(shell find romfs -type f)
 -include $(OBJS:.o=.d)
 
 clean:
-	rm -rf $(BUILD) $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh
+	rm -rf build build-selftest *.elf *.3dsx *.smdh
 
-.PHONY: all clean
+.PHONY: all clean selftest
