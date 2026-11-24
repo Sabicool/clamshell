@@ -20,6 +20,9 @@ struct CardViewOptions {
     std::string media_dir;     // folder containing collection.media files
     bool night_mode = false;
     int max_height = 6000;     // cap for very long cards
+    // Show sections that templates hide behind JavaScript buttons (Malleus
+    // extra resources, AnKing hints), since scripts don't run here.
+    bool reveal_hidden = false;
 };
 
 class CardContainer;

@@ -40,7 +40,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 |---|---|
 | Deck list | ↑↓ choose, ◀▶ collapse/expand, L/R page, **A** study, **X** sync, **Y** download images for the deck, **SELECT** settings, **START** quit |
 | Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, **SELECT** undo last answer, **START** back to decks |
-| Answer | **B** Again, **Y** Hard, **A** Good, **X** Easy (or tap the buttons) |
+| Answer | **B** Again, **Y** Hard, **A** Good, **X** Easy (or tap the buttons); **ZR** or tap *Show extra sections* to open sections a template hides behind buttons (e.g. Malleus resources) |
 | Settings | ↑↓ choose, ◀▶ change, **A** select, **B** back |
 
 ## How it works
@@ -54,7 +54,7 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 
 ## Known limitations (first draft)
 
-- **JavaScript doesn't run.** Card templates' scripts are ignored, so features like Malleus's one-by-one cloze reveal and tap-to-show hint buttons don't work; buttons and inputs are hidden. Embedding QuickJS with a small DOM bridge is the planned next step.
+- **JavaScript doesn't run.** Card templates' scripts are ignored, so features like Malleus's one-by-one cloze reveal don't work and buttons are hidden. *Show extra sections* opens the sections Malleus and AnKing templates hide behind buttons. Anki's built-in Image Occlusion masks are drawn without JavaScript. Embedding QuickJS with a small DOM bridge is the planned next step.
 - **No audio and no typed answers** yet. Undo keeps the last 30 answers of the current session.
 - **"Studied today" counts stay on the 3DS.** Daily new/review limits are tracked locally but aren't sent to the server, so desktop may offer more new cards that day than your limit.
 - **The study order is a re-implementation** of Anki's queue builder. Counts match desktop exactly; the exact order in which cards appear may differ slightly. Each answer is still scheduled exactly as desktop would.

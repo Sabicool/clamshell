@@ -196,6 +196,11 @@ a { color: #1a5fb4; text-decoration: none; }
 .io-highlight { background-color: transparent; border: 2px solid #ff8e8e; }
 )CSS";
 
+// Optional: sections normally opened by JavaScript buttons.
+const char* REVEAL_CSS = R"CSS(
+.ExtraResourceContent, .hints, div.hint, .hidden-content, [data-anki3ds-reveal] { display: block !important; }
+)CSS";
+
 // Applied after the note type's CSS: controls that only work with JavaScript.
 const char* COMPAT_CSS = R"CSS(
 button, input, select, textarea { display: none !important; }
@@ -477,6 +482,7 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
     container_->handles.clear();
     std::string body = render_mathjax_in_html(io_fallback(strip_scripts(body_html), opt.media_dir));
     std::string doc_html = "<html><head><style>" + std::string(BASE_CSS) + css + COMPAT_CSS +
+                           (opt.reveal_hidden ? std::string(REVEAL_CSS) : std::string()) +
                            (opt.night_mode ? std::string(NIGHT_CSS) : std::string()) +
                            "</style></head><body class=\"card card" + std::to_string(ord + 1) +
                            (opt.night_mode ? " nightMode night_mode" : "") + "\">" + body + "</body></html>";

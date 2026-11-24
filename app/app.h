@@ -56,6 +56,7 @@ struct Settings {
     float text_zoom = 0.75f;
     bool night = false;
     bool auto_media = true;  // fetch a deck's images when you open it after a sync
+    bool reveal_hidden = false;  // show sections templates hide behind JS buttons
     void load(const std::string& path);
     void save(const std::string& path) const;
 };

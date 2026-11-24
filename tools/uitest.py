@@ -34,6 +34,9 @@ key A
 shot 04-question
 key A
 shot 05-answer
+touch 160 129
+shot 05b-extra-sections
+touch 160 129
 hold DOWN 30
 shot 06-answer-scrolled
 key A

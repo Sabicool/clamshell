@@ -239,6 +239,7 @@ int main(int argc, char** argv) {
         CardViewOptions opt;
         if (argc > 5) opt.media_dir = argv[5];
         if (argc > 6) opt.text_zoom = (float)atof(argv[6]);
+        if (getenv("ANKI3DS_REVEAL")) opt.reveal_hidden = true;
         CardView view(fonts);
         std::string prefix = argv[4];
         view.render(r.question, r.css, r.ord, opt);

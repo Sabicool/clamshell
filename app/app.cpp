@@ -37,11 +37,13 @@ void Settings::load(const std::string& path) {
     text_zoom = j.value("text_zoom", text_zoom);
     night = j.value("night", night);
     auto_media = j.value("auto_media", auto_media);
+    reveal_hidden = j.value("reveal_hidden", reveal_hidden);
 }
 
 void Settings::save(const std::string& path) const {
     json j = {{"endpoint", endpoint}, {"hkey", hkey},       {"username", username},
-              {"text_zoom", text_zoom}, {"night", night}, {"auto_media", auto_media}};
+              {"text_zoom", text_zoom}, {"night", night}, {"auto_media", auto_media},
+              {"reveal_hidden", reveal_hidden}};
     if (minutes_west) j["minutes_west"] = *minutes_west;
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return;
@@ -568,6 +570,7 @@ void App::next_card() {
     opt.media_dir = media_dir_;
     opt.text_zoom = settings_.text_zoom;
     opt.night_mode = settings_.night;
+    opt.reveal_hidden = false;  // extra sections belong to the answer side
     view_->render(rendered_.question, rendered_.css, rendered_.ord, opt);
     answer_shown_ = false;
     scroll_ = 0;
@@ -581,6 +584,7 @@ void App::show_answer() {
     opt.media_dir = media_dir_;
     opt.text_zoom = settings_.text_zoom;
     opt.night_mode = settings_.night;
+    opt.reveal_hidden = settings_.reveal_hidden;
     view_->render(rendered_.answer, rendered_.css, rendered_.ord, opt);
     answer_shown_ = true;
     int anchor = view_->answer_anchor();
@@ -678,6 +682,15 @@ void App::on_review(const Input& in) {
         undo();
         return;
     }
+    Rect reveal_r{10, 112, 300, 34};
+    if (answer_shown_ && ((in.down & K_ZR) || (in.touch_down && hit(reveal_r, in.tx, in.ty)))) {
+        settings_.reveal_hidden = !settings_.reveal_hidden;
+        settings_.save(settings_path_);
+        int keep = scroll_;
+        show_answer();
+        scroll_ = std::min(keep, max_scroll());
+        return;
+    }
     auto buttons = review_buttons();
     int touched = -1;
     if (in.touch_down)
@@ -732,7 +745,12 @@ void App::draw_review() {
     text(bottom, fonts_, 12, 50, "↑↓ / circle pad: scroll   L/R: page", 12, t.dim);
     text(bottom, fonts_, 12, 68, sched_ && sched_->can_undo() ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
     if (max_scroll() > 0 && scroll_ < max_scroll())
-        text(bottom, fonts_, 12, 92, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
+        text(bottom, fonts_, 12, 90, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
+    if (answer_shown_)
+        button(bottom, fonts_,
+               {{10, 112, 300, 34}, settings_.reveal_hidden ? "Hide extra sections" : "Show extra sections", "", "ZR",
+                t.hard},
+               settings_.night);
     for (auto& b : review_buttons()) button(bottom, fonts_, b, settings_.night);
 }
 
