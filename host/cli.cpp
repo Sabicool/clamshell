@@ -300,6 +300,7 @@ int main(int argc, char** argv) {
         if (argc > 5) opt.media_dir = argv[5];
         if (argc > 6) opt.text_zoom = (float)atof(argv[6]);
         if (getenv("ANKI3DS_REVEAL")) opt.reveal_hidden = true;
+        if (getenv("ANKI3DS_NIGHT")) opt.night_mode = true;
         CardView view(fonts);
         std::string prefix = argv[4];
         bool js = getenv("ANKI3DS_JS") != nullptr;

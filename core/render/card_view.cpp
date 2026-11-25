@@ -41,6 +41,13 @@ struct FontHandle {
 
 uint32_t to_argb(const web_color& c) { return rgba(c.red, c.green, c.blue, c.alpha); }
 
+// Night mode at draw time: near-white fills become the night background and
+// near-black text and lines become light, whatever the CSS cascade decided.
+// Cards with their own colours keep them.
+static bool near_white(const web_color& c) { return c.alpha > 200 && c.red > 235 && c.green > 235 && c.blue > 235; }
+static bool near_black(const web_color& c) { return c.alpha > 200 && c.red < 60 && c.green < 60 && c.blue < 60; }
+static const uint32_t NIGHT_BG = 0xFF2B2B2B, NIGHT_FG = 0xFFE8E8E8;
+
 std::string url_decode(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.size(); i++) {
@@ -226,7 +233,7 @@ button, input, select, textarea { display: none !important; }
 )CSS";
 
 const char* NIGHT_CSS = R"CSS(
-html, .card { background: #2b2b2b !important; color: #e8e8e8 !important; }
+html.night-mode, body.card.nightMode { background-color: #2b2b2b !important; background-image: none !important; color: #e8e8e8 !important; }
 .cloze { color: #7cb7ff; }
 )CSS";
 
@@ -376,7 +383,7 @@ public:
     void draw_text(uint_ptr hdc, const char* text, uint_ptr hf, web_color color, const position& pos) override {
         Canvas* c = (Canvas*)hdc;
         FontHandle* h = (FontHandle*)hf;
-        uint32_t col = to_argb(color);
+        uint32_t col = opt.night_mode && near_black(color) ? NIGHT_FG : to_argb(color);
         float y = pos.y + (pos.height - (std::ceil(h->m.ascent) + std::ceil(h->m.descent)));
         float adv = fonts.draw(*c, h->face, h->px, pos.x, y, text, col);
         if (h->decoration & text_decoration_line_underline)
@@ -392,13 +399,13 @@ public:
 
     void draw_list_marker(uint_ptr hdc, const list_marker& m) override {
         Canvas* c = (Canvas*)hdc;
-        uint32_t col = to_argb(m.color);
+        uint32_t col = opt.night_mode && near_black(m.color) ? NIGHT_FG : to_argb(m.color);
         int cx = (int)(m.pos.x + m.pos.width / 2), cy = (int)(m.pos.y + m.pos.height / 2);
         int r = std::max(2, (int)(m.pos.width / 2));
         switch (m.marker_type) {
             case list_style_type_circle:
                 c->fill_circle(cx, cy, r, col);
-                c->fill_circle(cx, cy, std::max(1, r - 1), 0xFFFFFFFF);
+                c->fill_circle(cx, cy, std::max(1, r - 1), opt.night_mode ? NIGHT_BG : 0xFFFFFFFF);
                 break;
             case list_style_type_square:
                 c->fill_rect((int)m.pos.x, (int)m.pos.y, (int)m.pos.width, (int)m.pos.height, col);
@@ -453,7 +460,8 @@ public:
         position cl = layer.clip_box;
         c->push_clip({(int)cl.x, (int)cl.y, (int)std::ceil(cl.width), (int)std::ceil(cl.height)});
         int radius = (int)layer.border_radius.top_left_x;
-        c->fill_round_rect((int)b.x, (int)b.y, (int)std::ceil(b.width), (int)std::ceil(b.height), radius, to_argb(color));
+        uint32_t col = opt.night_mode && near_white(color) ? NIGHT_BG : to_argb(color);
+        c->fill_round_rect((int)b.x, (int)b.y, (int)std::ceil(b.width), (int)std::ceil(b.height), radius, col);
         c->pop_clip();
     }
     void draw_gradient_fallback(uint_ptr hdc, const background_layer& layer, const background_layer::gradient_base& g) {
@@ -474,7 +482,7 @@ public:
         Canvas* c = (Canvas*)hdc;
         auto side = [&](const border& bd, int x, int y, int w, int h) {
             if (bd.width <= 0 || bd.style == border_style_none || bd.style == border_style_hidden) return;
-            c->fill_rect(x, y, w, h, to_argb(bd.color));
+            c->fill_rect(x, y, w, h, opt.night_mode && near_black(bd.color) ? NIGHT_FG : to_argb(bd.color));
         };
         int x = (int)p.x, y = (int)p.y, w = (int)std::ceil(p.width), h = (int)std::ceil(p.height);
         side(b.top, x, y, w, (int)std::ceil(b.top.width));
@@ -544,11 +552,17 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
     std::string body = render_mathjax_in_html(io_fallback(strip_scripts(body_html), opt.media_dir));
     if (body.compare(0, 13, "<div id=\"qa\">") != 0) body = "<div id=\"qa\">" + body + "</div>";
     // "mobile" like AnkiDroid/AnkiMobile, so templates use their small-screen layout
-    std::string doc_html = "<html class=\"mobile\"><head><style>" + std::string(BASE_CSS) + css + COMPAT_CSS +
+    // Night colours go in style attributes too: litehtml's selector cascade has given
+    // the wrong answer on the 3DS for the same stylesheet, while inline styles always apply.
+    static const char* NIGHT_INLINE =
+        " style=\"background-color: #2b2b2b !important; background-image: none !important; color: #e8e8e8 !important\"";
+    std::string doc_html = std::string("<html class=\"mobile") + (opt.night_mode ? " night-mode\"" : "\"") +
+                           (opt.night_mode ? NIGHT_INLINE : "") + "><head><style>" + std::string(BASE_CSS) + css + COMPAT_CSS +
                            (opt.reveal_hidden ? std::string(REVEAL_CSS) : std::string()) +
                            (opt.night_mode ? std::string(NIGHT_CSS) : std::string()) +
                            "</style></head><body class=\"card card" + std::to_string(ord + 1) +
-                           (opt.night_mode ? " nightMode night_mode" : "") + "\">" + body + "</body></html>";
+                           (opt.night_mode ? " nightMode night_mode\"" + std::string(NIGHT_INLINE) : std::string("\"")) + ">" + body +
+                           "</body></html>";
     auto doc = document::createFromString(doc_html, container_.get());
     doc->render((pixel_t)opt.width);
     int h = std::max((int)std::ceil(doc->height()), opt.viewport_height);

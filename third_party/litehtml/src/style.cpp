@@ -1330,7 +1330,7 @@ void style::parse_text_decoration_line(const css_token_vector& tokens, bool impo
 		if(token.type == IDENT)
 		{
 			int idx = value_index(token.ident(), style_text_decoration_line_strings);
-			if(idx >= 0)
+			if(idx > 0)  // 0 is "none"; shifting by -1 is undefined
 			{
 				val |= 1 << (idx - 1);
 			}
@@ -1377,7 +1377,7 @@ void style::parse_text_emphasis_position(const css_token_vector &tokens, bool im
 		if(token.type == IDENT)
 		{
 			int idx = value_index(token.ident(), style_text_emphasis_position_strings);
-			if(idx >= 0)
+			if(idx > 0)  // 0 is "none"; shifting by -1 is undefined
 			{
 				val |= 1 << (idx - 1);
 			}
