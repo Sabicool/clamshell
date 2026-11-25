@@ -208,6 +208,8 @@ static std::string escape_attr(const std::string& s) {
     for (char c : s) {
         if (c == '&') o += "&amp;";
         else if (c == '"') o += "&quot;";
+        else if (c == '<') o += "&lt;";  // browsers don't, but it keeps naive HTML scanners safe
+        else if (c == '>') o += "&gt;";
         else o += c;
     }
     return o;

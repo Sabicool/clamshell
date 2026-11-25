@@ -257,7 +257,20 @@ std::string render_mathjax_in_html(const std::string& html) {
     size_t i = 0;
     while (i < html.size()) {
         if (html[i] == '<') {
-            size_t e = html.find('>', i);
+            // end of the tag, ignoring '>' inside quoted attribute values
+            size_t e = std::string::npos;
+            char quote = 0;
+            for (size_t j = i + 1; j < html.size(); j++) {
+                char c = html[j];
+                if (quote) {
+                    if (c == quote) quote = 0;
+                } else if (c == '"' || c == '\'') {
+                    quote = c;
+                } else if (c == '>') {
+                    e = j;
+                    break;
+                }
+            }
             if (e == std::string::npos) {
                 out += html.substr(i);
                 break;
