@@ -126,6 +126,10 @@ def main():
             # desktop studies from its own queue (may overlap the 3DS cards: then
             # the newer card wins and both review-log rows are kept)
             desk_cards = []
+            if not desk.sched.get_queued_cards().cards and due:
+                # e.g. the demo collection, whose current deck is the empty Default deck
+                name = desk.decks.name(desk.get_card(due[0]).did).split("::")[0]
+                desk.decks.select(desk.decks.id_for_name(name))
             for _ in range(20):
                 q = desk.sched.get_queued_cards()
                 if not q.cards:
