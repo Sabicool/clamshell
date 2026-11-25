@@ -419,8 +419,13 @@ bool Collection::open(const std::string& path, std::string& err) {
     register_anki_functions(db_.h);
     db_.exec("pragma cache_size = -8000");
     db_.exec("pragma temp_store = memory");
-    // Anki uses WAL on desktop; a single-file journal is safer on an SD card.
-    db_.exec("pragma journal_mode = delete");
+    // Anki uses WAL on desktop; a rollback journal is safer on an SD card.
+    // PERSIST keeps the journal file between commits, which saves creating and
+    // deleting a file on the FAT card for every answer.
+    db_.exec("pragma journal_mode = persist");
+    // Only this app uses the file while it's open. Exclusive mode also stops
+    // SQLite re-checking the kept journal file before every query.
+    db_.exec("pragma locking_mode = exclusive");
     {
         Stmt s(db_.h, "select ver from col");
         if (!s.step()) {
@@ -1157,7 +1162,7 @@ static RevlogPartial make_partial(const CardState& current, const CardState& nex
 static bool same_state(const CardState& a, const CardState& b);
 
 bool Scheduler::answer(int64_t card_id, Rating rating, uint32_t millis_taken, std::string& err,
-                       const SchedulingStates* precomputed) {
+                       const SchedulingStates* precomputed, const std::function<void()>& in_same_transaction) {
     auto oc = col_.get_card(card_id);
     if (!oc) { err = "card not found"; return false; }
     Card original = *oc;
@@ -1349,6 +1354,7 @@ bool Scheduler::answer(int64_t card_id, Rating rating, uint32_t millis_taken, st
             }
         }
     }
+    if (in_same_transaction) in_same_transaction();
     col_.set_modified();
     col_.commit();
     if (lb_ && c.queue == Q_REVIEW) lb_->add_card(c.id, c.nid, u.home->config_id, c.ivl);

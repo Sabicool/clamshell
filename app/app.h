@@ -118,6 +118,19 @@ private:
     std::map<std::string, std::string> js_storage_;  // sessionStorage/localStorage for the session
     std::string current_html_;
     void render_current();
+    CardViewOptions view_options() const;
+    // The likely next card, laid out while the answer is on screen so it
+    // appears as soon as the answer is saved. Thrown away if a different card comes up.
+    struct Prefetch {
+        int64_t card_id = 0;
+        RenderedCard rendered;
+        std::unique_ptr<js::CardScript> script;
+        std::string html;
+        std::unique_ptr<CardView> view;
+    };
+    std::unique_ptr<Prefetch> prefetch_;
+    bool prefetch_due_ = false;
+    void prefetch_next();
     bool answer_shown_ = false;
     int scroll_ = 0;
     int64_t shown_at_ms_ = 0;

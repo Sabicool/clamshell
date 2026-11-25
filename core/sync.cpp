@@ -596,6 +596,8 @@ SyncResult SyncClient::full_download(Collection& col, const std::string& path, s
         }
     }
     col.close();
+    // the old file's journal must not be applied to the new one
+    remove((path + "-journal").c_str());
     std::string backup = path + ".bak";
     remove(backup.c_str());
     rename(path.c_str(), backup.c_str());

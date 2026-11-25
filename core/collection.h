@@ -275,7 +275,8 @@ public:
     SchedulingStates scheduling_states(const Card& card);
     // Applies an answer (writes card, revlog, buries siblings, leech tag).
     bool answer(int64_t card_id, Rating rating, uint32_t millis_taken, std::string& err,
-                const SchedulingStates* precomputed = nullptr);
+                const SchedulingStates* precomputed = nullptr,
+                const std::function<void()>& in_same_transaction = nullptr);
     // Human-readable button labels ("10m", "3d", "1.2mo").
     std::vector<std::string> describe_next_states(const SchedulingStates& s);
     // Reverts the most recent answer (card, buried siblings, leech tag, review log).

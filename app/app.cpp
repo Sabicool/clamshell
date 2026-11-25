@@ -189,6 +189,11 @@ bool App::debug_select(const std::string& needle) {
 
 bool App::frame(const Input& in) {
     if (in.down || in.touch_down || in.scroll) dirty = true;
+    // the frame after the answer appeared, with no button pressed: lay out the next card
+    if (prefetch_due_ && mode_ == Mode::Review && !in.down && !in.touch_down) {
+        prefetch_due_ = false;
+        prefetch_next();
+    }
     switch (mode_) {
         case Mode::Setup: on_setup(in); break;
         case Mode::Decks:
@@ -569,6 +574,8 @@ static int64_t step_t_ = 0;
 #endif
 
 void App::start_review(int64_t deck_id) {
+    prefetch_.reset();
+    prefetch_due_ = false;
 #ifdef ANKI3DS_SELFTEST
     step_t_ = pf_.local_clock_ms();
 #endif
@@ -615,33 +622,72 @@ void App::next_card() {
     states_ = sched_->scheduling_states(*card_);
     labels_ = sched_->describe_next_states(states_);
     STEP_TIME("  next states");
-    rendered_ = render_card(col_, *card_);
-    STEP_TIME("  template");
     answer_shown_ = false;
-    script_.reset();
-    if (settings_.run_scripts) {
-        script_ = std::make_unique<js::CardScript>();
-        current_html_ = script_->run(rendered_.question, js_storage_);
+    prefetch_due_ = false;
+    if (prefetch_ && prefetch_->card_id == card_->id) {
+        rendered_ = std::move(prefetch_->rendered);
+        script_ = std::move(prefetch_->script);
+        current_html_ = std::move(prefetch_->html);
+        std::swap(view_, prefetch_->view);
+        prefetch_.reset();
+        dirty = true;
+        STEP_TIME("  prefetched");
     } else {
-        current_html_ = rendered_.question;
+        prefetch_.reset();
+        rendered_ = render_card(col_, *card_);
+        STEP_TIME("  template");
+        script_.reset();
+        if (settings_.run_scripts) {
+            script_ = std::make_unique<js::CardScript>();
+            current_html_ = script_->run(rendered_.question, js_storage_);
+        } else {
+            current_html_ = rendered_.question;
+        }
+        STEP_TIME("  card script");
+        render_current();
+        STEP_TIME("  layout+draw");
     }
-    STEP_TIME("  card script");
-    render_current();
-    STEP_TIME("  layout+draw");
     scroll_ = 0;
     shown_at_ms_ = pf_.local_clock_ms();
     mode_ = Mode::Review;
     dirty = true;
 }
 
-void App::render_current() {
+CardViewOptions App::view_options() const {
     CardViewOptions opt;
     opt.media_dir = media_dir_;
     opt.text_zoom = settings_.text_zoom;
     opt.night_mode = settings_.night;
     opt.reveal_hidden = answer_shown_ && settings_.reveal_hidden;  // extra sections belong to the answer side
-    view_->render(current_html_, rendered_.css, rendered_.ord, opt);
+    return opt;
+}
+
+void App::render_current() {
+    view_->render(current_html_, rendered_.css, rendered_.ord, view_options());
     dirty = true;
+}
+
+void App::prefetch_next() {
+    prefetch_.reset();
+    if (!queue_) return;
+    auto q = queue_->peek(1);  // peek(0) is the card being answered
+    if (!q) return;
+    auto c = col_.get_card(q->card_id);
+    if (!c) return;
+    auto p = std::make_unique<Prefetch>();
+    p->card_id = c->id;
+    p->rendered = render_card(col_, *c);
+    if (settings_.run_scripts) {
+        p->script = std::make_unique<js::CardScript>();
+        p->html = p->script->run(p->rendered.question, js_storage_);
+    } else {
+        p->html = p->rendered.question;
+    }
+    p->view = std::make_unique<CardView>(fonts_);
+    CardViewOptions opt = view_options();
+    opt.reveal_hidden = false;  // question side
+    p->view->render(p->html, p->rendered.css, p->rendered.ord, opt);
+    prefetch_ = std::move(p);
 }
 
 void App::show_answer() {
@@ -651,11 +697,15 @@ void App::show_answer() {
     int anchor = view_->answer_anchor();
     scroll_ = anchor > 60 ? std::min(anchor - 40, max_scroll()) : 0;
     dirty = true;
+    prefetch_due_ = true;
 }
 
 void App::answer(Rating r) {
     if (!card_) return;
     uint32_t millis = (uint32_t)std::max<int64_t>(0, pf_.local_clock_ms() - shown_at_ms_);
+#ifdef ANKI3DS_SELFTEST
+    step_t_ = pf_.local_clock_ms();
+#endif
     std::string err;
     int original_queue = card_->queue;
     int64_t did = card_->did;
@@ -667,14 +717,18 @@ void App::answer(Rating r) {
         for (int64_t id : ids)
             if (const Deck* d = col_.deck(id)) saved.push_back({id, d->common.encode()});
     }
-    if (!sched_->answer(card_->id, r, millis, err, &states_)) {
+    // the deck's studied-today counters go in the same transaction: one SD card commit per answer
+    auto studied = [&] {
+        record_studied(col_, did, original_queue == Q_NEW,
+                       original_queue == Q_REVIEW || original_queue == Q_DAY_LEARN, millis);
+    };
+    if (!sched_->answer(card_->id, r, millis, err, &states_, studied)) {
         show_message("Couldn't save the answer", err, Mode::Decks);
         return;
     }
+    STEP_TIME("answer saved");
     deck_undo_.push_back(saved);
     if (deck_undo_.size() > 30) deck_undo_.erase(deck_undo_.begin());
-    record_studied(col_, did, original_queue == Q_NEW, original_queue == Q_REVIEW || original_queue == Q_DAY_LEARN,
-                   millis);
     if (auto updated = col_.get_card(card_->id)) queue_->on_answered(*updated);
     reviewed_++;
     next_card();
@@ -735,11 +789,13 @@ void App::on_review(const Input& in) {
         }
     }
     if (in.down & K_START) {
+        prefetch_.reset();
         build_rows();
         mode_ = Mode::Decks;
         return;
     }
     if (in.down & K_SELECT) {
+        prefetch_.reset();
         undo();
         return;
     }
@@ -754,6 +810,8 @@ void App::on_review(const Input& in) {
     }
     // ◀ ▶ go to the card's own keyboard shortcuts (e.g. Malleus one-by-one reveal)
     if (script_ && (in.down & (K_LEFT | K_RIGHT))) {
+        prefetch_.reset();
+        if (answer_shown_) prefetch_due_ = true;
         if (script_->key((in.down & K_RIGHT) ? "ArrowRight" : "ArrowLeft")) {
             current_html_ = script_->html();
             int keep = scroll_;

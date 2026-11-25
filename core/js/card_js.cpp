@@ -364,6 +364,43 @@ struct CardScript::Impl {
         }
         return ok;
     }
+    // The prelude is the same for every card, so it is compiled once and the
+    // bytecode reused; parsing it per card was a noticeable part of each card's load time.
+    bool run_prelude(std::string& log) {
+        static std::vector<uint8_t> bytecode;
+        JSValue fn;
+        if (bytecode.empty()) {
+            fn = JS_Eval(ctx, PRELUDE, strlen(PRELUDE), "prelude", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+            if (JS_IsException(fn)) {
+                JS_FreeValue(ctx, JS_GetException(ctx));
+                return eval(PRELUDE, "prelude", log);  // reports the error
+            }
+            size_t n = 0;
+            if (uint8_t* buf = JS_WriteObject(ctx, &n, fn, JS_WRITE_OBJ_BYTECODE)) {
+                bytecode.assign(buf, buf + n);
+                js_free(ctx, buf);
+            }
+        } else {
+            fn = JS_ReadObject(ctx, bytecode.data(), bytecode.size(), JS_READ_OBJ_BYTECODE);
+            if (JS_IsException(fn)) {
+                JS_FreeValue(ctx, JS_GetException(ctx));
+                bytecode.clear();
+                return eval(PRELUDE, "prelude", log);
+            }
+        }
+        JSValue v = JS_EvalFunction(ctx, fn);  // takes ownership of fn
+        bool ok = !JS_IsException(v);
+        if (!ok) {
+            JSValue e = JS_GetException(ctx);
+            if (log.size() < 20000) log += "error in prelude: " + str_arg(ctx, e) + "\n";
+            JS_FreeValue(ctx, e);
+        }
+        JS_FreeValue(ctx, v);
+        JSContext* jc;
+        for (int i = 0; i < 1000 && JS_ExecutePendingJob(rt, &jc) > 0; i++) {
+        }
+        return ok;
+    }
 };
 
 CardScript::CardScript() = default;
@@ -410,7 +447,7 @@ std::string CardScript::run(const std::string& body_html, std::map<std::string, 
 
     m.set_deadline(2000);
     m.eval(st_js, "storage", log_);
-    if (!m.eval(PRELUDE, "prelude", log_)) return body_html;
+    if (!m.run_prelude(log_)) return body_html;
     run_scripts(true);
     return m.dom.body_html();
 }
