@@ -42,6 +42,7 @@ void Settings::load(const std::string& path) {
     tz_auto = j.value("tz_auto", tz_auto);
     run_scripts = j.value("run_scripts", run_scripts);
     scratchpad = j.value("scratchpad", scratchpad);
+    auto_sync = std::clamp(j.value("auto_sync", auto_sync), 0, 3);
     if (j.contains("buttons") && j["buttons"].is_object())
         for (auto& [k, v] : j["buttons"].items())
             if (v.is_string()) buttons[k] = v.get<std::string>();
@@ -56,7 +57,7 @@ void Settings::save(const std::string& path) const {
     json j = {{"endpoint", endpoint}, {"hkey", hkey},       {"username", username},
               {"text_zoom", text_zoom}, {"night", night}, {"auto_media", auto_media},
               {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}, {"run_scripts", run_scripts},
-              {"scratchpad", scratchpad}};
+              {"scratchpad", scratchpad}, {"auto_sync", auto_sync}};
     if (minutes_west) j["minutes_west"] = *minutes_west;
     j["buttons"] = buttons;
     j["note_type_buttons"] = nt_buttons;
@@ -102,7 +103,18 @@ void App::init() {
     view_ = std::make_unique<CardView>(fonts_);
     if (exists(col_path_)) open_collection();
     else mode_ = Mode::Setup;
+    startup_sync_due_ = col_.is_open() && mode_ == Mode::Decks && (settings_.auto_sync & 1);
     dirty = true;
+}
+
+void App::on_pause() {
+    if (!paused_at_ms_) paused_at_ms_ = pf_.local_clock_ms();
+}
+
+void App::on_resume() {
+    if (!paused_at_ms_) return;
+    if (mode_ == Mode::Review) shown_at_ms_ += pf_.local_clock_ms() - paused_at_ms_;
+    paused_at_ms_ = 0;
 }
 
 int64_t App::utc_ms() {
@@ -202,6 +214,10 @@ bool App::debug_select(const std::string& needle) {
 
 bool App::frame(const Input& in) {
     if (in.down || in.touch_down || in.scroll) dirty = true;
+    if (startup_sync_due_ && mode_ == Mode::Decks) {
+        startup_sync_due_ = false;
+        sync_flow(true);
+    }
     // the frame after the answer appeared, with no button pressed: lay out the next card
     if (prefetch_due_ && mode_ == Mode::Review && !in.down && !in.touch_down) {
         prefetch_due_ = false;
@@ -222,6 +238,7 @@ bool App::frame(const Input& in) {
             if (in.down & (K_A | K_B | K_START) || in.touch_down) {
                 build_rows();
                 mode_ = Mode::Decks;
+                sync_after_studying();
             }
             break;
         case Mode::Settings: on_settings(in); break;
@@ -365,15 +382,24 @@ void App::login_flow(bool custom_server) {
 
 // ---------------------------------------------------------------- sync
 
-void App::sync_flow() {
+// automatic: started by the "Sync automatically" setting. Problems go in the
+// deck list's status line rather than a message, except a full download, which always asks.
+void App::sync_flow(bool automatic) {
     if (settings_.hkey.empty()) {
-        show_message("Not signed in", "Sign in to your sync server from Settings first.", Mode::Decks);
+        if (!automatic) show_message("Not signed in", "Sign in to your sync server from Settings first.", Mode::Decks);
         return;
     }
     std::string err;
     progress("Syncing…", "Connecting");
     if (!pf_.net_up(err)) {
-        show_message("No network", err, Mode::Decks);
+        if (automatic) {
+            status_ = "Couldn't sync: " + err;
+            mode_ = Mode::Decks;
+            build_rows();
+            dirty = true;
+        } else {
+            show_message("No network", err, Mode::Decks);
+        }
         return;
     }
     SyncClient client(settings_.endpoint);
@@ -415,9 +441,19 @@ void App::sync_flow() {
             }
             break;
         default:
-            show_message("Sync failed", err.empty() ? r.message : err, Mode::Decks);
+            if (automatic) {
+                status_ = "Couldn't sync: " + (err.empty() ? r.message : err);
+                mode_ = Mode::Decks;
+                build_rows();
+            } else {
+                show_message("Sync failed", err.empty() ? r.message : err, Mode::Decks);
+            }
     }
     dirty = true;
+}
+
+void App::sync_after_studying() {
+    if (reviewed_ > 0 && (settings_.auto_sync & 2)) sync_flow(true);
 }
 
 void App::full_download_flow() {
@@ -806,7 +842,9 @@ void App::undo() {
     std::string err;
     auto cid = sched_->undo(err);
     if (!cid) return;
+    bool was_answer = true;
     if (!deck_undo_.empty()) {
+        was_answer = !deck_undo_.back().empty();  // card actions push an empty entry
         for (auto& [id, blob] : deck_undo_.back()) {
             auto it = col_.decks.find(id);
             if (it == col_.decks.end()) continue;
@@ -817,7 +855,7 @@ void App::undo() {
         }
         deck_undo_.pop_back();
     }
-    if (reviewed_ > 0) reviewed_--;
+    if (was_answer && reviewed_ > 0) reviewed_--;
     queue_->build();
     auto c = col_.get_card(*cid);
     std::string kind = !c ? "review" : c->queue == Q_NEW ? "new" : c->queue == Q_REVIEW ? "review" : "learn";
@@ -1167,6 +1205,7 @@ void App::on_review(const Input& in) {
         prefetch_.reset();
         build_rows();
         mode_ = Mode::Decks;
+        sync_after_studying();
         return;
     }
     if (in.down & K_SELECT) {
@@ -1294,9 +1333,9 @@ void App::draw_done() {
 // ---------------------------------------------------------------- settings
 
 static const char* SETTING_NAMES[] = {"Text size",          "Night mode",        "Time zone",
-                                      "Download images automatically", "Run card scripts", "Buttons",
-                                      "Sign in again", "Replace this 3DS copy with the server's", "About"};
-static const int SETTING_COUNT = 9;
+                                      "Download images automatically", "Sync automatically", "Run card scripts",
+                                      "Buttons", "Sign in again", "Replace this 3DS copy with the server's", "About"};
+static const int SETTING_COUNT = 10;
 
 void App::on_settings(const Input& in) {
     if (in.down & K_DOWN) setting_sel_ = (setting_sel_ + 1) % SETTING_COUNT;
@@ -1331,25 +1370,28 @@ void App::on_settings(const Input& in) {
             if (delta || activate) settings_.auto_media = !settings_.auto_media;
             break;
         case 4:
-            if (delta || activate) settings_.run_scripts = !settings_.run_scripts;
+            if (delta) settings_.auto_sync = (settings_.auto_sync + delta + 4) % 4;
             break;
         case 5:
-            if (activate || delta) open_buttons(0, Mode::Settings);
+            if (delta || activate) settings_.run_scripts = !settings_.run_scripts;
             break;
         case 6:
+            if (activate || delta) open_buttons(0, Mode::Settings);
+            break;
+        case 7:
 #ifdef ANKI3DS_ANKIWEB
             if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
 #else
             if (activate) login_flow(true);
 #endif
             break;
-        case 7:
+        case 8:
             if (activate) {
                 if (settings_.hkey.empty()) show_message("Not signed in", "Sign in first.", Mode::Settings);
                 else confirm_download(true);
             }
             break;
-        case 8:
+        case 9:
             if (activate)
                 show_message("About " APP_NAME,
                              "An unofficial, Anki-compatible client, not made by the Anki team. Scheduling is a port of Anki 26.08 (FSRS, load balancer, "
@@ -1366,11 +1408,11 @@ void App::draw_settings() {
     top.resize(400, 240, t.bg);
     draw_header(top, "Settings", settings_.username);
     for (int i = 0; i < SETTING_COUNT; i++) {
-        int y = 28 + i * 23;
+        int y = 27 + i * 21;
         bool sel = i == setting_sel_;
-        if (sel) top.fill_round_rect(4, y, 392, 22, 6, t.accent);
+        if (sel) top.fill_round_rect(4, y, 392, 20, 6, t.accent);
         uint32_t tc = sel ? t.accent_text : t.text;
-        text(top, fonts_, 14, (float)y + 3, SETTING_NAMES[i], 14, tc);
+        text(top, fonts_, 14, (float)y + 2, SETTING_NAMES[i], 14, tc);
         std::string value;
         switch (i) {
             case 0: value = "‹ " + std::to_string((int)std::lround(settings_.text_zoom * 100)) + "% ›"; break;
@@ -1379,12 +1421,17 @@ void App::draw_settings() {
                 value = "‹ " + fmt_offset(settings_.minutes_west.value_or(0)) + (settings_.tz_auto ? " (auto)" : "") + " ›";
                 break;
             case 3: value = settings_.auto_media ? "On" : "Off"; break;
-            case 4: value = settings_.run_scripts ? "On" : "Off"; break;
-            case 5: value = "›"; break;
-            case 6: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
+            case 4: {
+                static const char* names[] = {"Off", "When opened", "After studying", "Both"};
+                value = std::string("‹ ") + names[settings_.auto_sync & 3] + " ›";
+                break;
+            }
+            case 5: value = settings_.run_scripts ? "On" : "Off"; break;
+            case 6: value = "›"; break;
+            case 7: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
             default: break;
         }
-        if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 3, value, 14, tc);
+        if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 2, value, 14, tc);
     }
     bottom.resize(320, 240, t.bg);
     std::string help;
@@ -1398,15 +1445,20 @@ void App::draw_settings() {
             break;
         case 3: help = "When you open a deck, fetch any of its images that aren't on the SD card yet."; break;
         case 4:
+            help = "Sync when Clamshell opens, after you finish studying a deck, both, or only when you press X. "
+                   "If it can't connect (for example away from home), it says so on the deck list and you can "
+                   "keep studying.";
+            break;
+        case 5:
             help = "Runs the JavaScript in card templates (for example Malleus one-by-one clozes: press ▶ to reveal "
                    "the next line, ◀ to hide it). Turn off if a deck's cards misbehave.";
             break;
-        case 5:
+        case 6:
             help = "Choose what L, R, ZL, ZR and ◀ ▶ do while reviewing: page, extra sections, undo, flags, or a "
                    "keyboard key for decks with their own shortcuts. Press A to open.";
             break;
-        case 6: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
-        case 7:
+        case 7: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
+        case 8:
             help = "Downloads the whole collection from the sync server again. Reviews on this 3DS that haven't "
                    "been synced will be lost.";
             break;

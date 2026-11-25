@@ -120,6 +120,12 @@ int main(int argc, char** argv) {
                 app.frame(in);
             }
             app.frame(idle);
+        } else if (cmd == "lid") {
+            // lid close | lid open: what the 3DS reports for sleep and wake
+            std::string state;
+            ss >> state;
+            if (state == "close") app.on_pause();
+            else app.on_resume();
         } else if (cmd == "type") {
             std::string rest;
             std::getline(ss, rest);

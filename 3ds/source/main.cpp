@@ -270,6 +270,16 @@ int main() {
     migrate_old_folder();
     App app(pf);
     app.init();
+    // closing the lid (sleep) or opening the HOME Menu pauses the answer timer
+    static aptHookCookie apt_cookie;
+    aptHook(
+        &apt_cookie,
+        [](APT_HookType type, void* param) {
+            App* a = (App*)param;
+            if (type == APTHOOK_ONSLEEP || type == APTHOOK_ONSUSPEND) a->on_pause();
+            else if (type == APTHOOK_ONWAKEUP || type == APTHOOK_ONRESTORE) a->on_resume();
+        },
+        &app);
 
     Input prev;
     bool was_touching = false;

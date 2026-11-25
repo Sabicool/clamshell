@@ -62,6 +62,7 @@ struct Settings {
     bool auto_media = true;  // fetch a deck's images when you open it after a sync
     bool reveal_hidden = false;  // show sections templates hide behind JS buttons
     bool run_scripts = true;     // run card templates' JavaScript (QuickJS)
+    int auto_sync = 3;           // 0 off, 1 when the app opens, 2 after studying, 3 both
     bool scratchpad = false;     // bottom screen is a stylus scratchpad while reviewing
     ButtonMap buttons = default_buttons();         // for every note type
     std::map<std::string, ButtonMap> nt_buttons;   // note type id -> its own set
@@ -76,6 +77,10 @@ public:
     explicit App(Platform& p);
     ~App();
     void init();
+    // The lid was closed or the HOME Menu opened, and then the app came back:
+    // time away doesn't count towards the card's answer time.
+    void on_pause();
+    void on_resume();
     // Runs one frame. Returns false when the user asks to quit.
     bool frame(const Input& in);
     Canvas top{400, 240}, bottom{320, 240};
@@ -165,6 +170,7 @@ private:
     bool answer_shown_ = false;
     int scroll_ = 0;
     int64_t shown_at_ms_ = 0;
+    int64_t paused_at_ms_ = 0;
     int reviewed_ = 0;
 
     // settings
@@ -189,7 +195,9 @@ private:
     void on_settings(const Input& in);
 
     void login_flow(bool custom_server);
-    void sync_flow();
+    void sync_flow(bool automatic = false);
+    bool startup_sync_due_ = false;
+    void sync_after_studying();
     void full_download_flow();
     void media_flow(int64_t deck_id, bool quiet);
     void fetch_media(const std::vector<std::string>& names, bool quiet);

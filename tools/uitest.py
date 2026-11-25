@@ -82,6 +82,8 @@ shot 12-settings-night
 key DOWN
 key DOWN
 key DOWN
+shot 12a-settings-sync
+key DOWN
 key DOWN
 key A
 shot 12b-buttons
@@ -96,7 +98,9 @@ select Malleus Clinical Medicine
 key A
 key A
 shot 13-night-answer
+key A
 key START
+shot 14-auto-synced-after-studying
 """
 
 
