@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     static const std::map<std::string, uint32_t> keys = {
         {"A", K_A},     {"B", K_B},         {"X", K_X},         {"Y", K_Y},          {"L", K_L},
         {"R", K_R},     {"UP", K_UP},       {"DOWN", K_DOWN},   {"LEFT", K_LEFT},    {"RIGHT", K_RIGHT},
-        {"START", K_START}, {"SELECT", K_SELECT}};
+        {"START", K_START}, {"SELECT", K_SELECT}, {"ZL", K_ZL}, {"ZR", K_ZR}};
     std::ifstream script(argv[2]);
     std::string line;
     while (std::getline(script, line)) {

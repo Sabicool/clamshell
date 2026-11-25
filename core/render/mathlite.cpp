@@ -186,7 +186,10 @@ private:
         }
         if (name == "frac" || name == "dfrac" || name == "tfrac") {
             std::string a = parse_arg(), b = parse_arg();
-            return "<span class=\"mjx-frac\"><sup>" + a + "</sup>⁄<sub>" + b + "</sub></span>";
+            // stacked: numerator over a rule over denominator; \dfrac stays full size
+            std::string cls = name == "dfrac" ? "mjx-frac mjx-dfrac" : "mjx-frac";
+            return "<span class=\"" + cls + "\"><span class=\"mjx-row\"><span class=\"mjx-num\">" + a +
+                   "</span></span><span class=\"mjx-row\"><span class=\"mjx-den\">" + b + "</span></span></span>";
         }
         if (name == "sqrt") {
             skip_ws();

@@ -39,6 +39,8 @@ shot 05b-extra-sections
 touch 160 129
 hold DOWN 30
 shot 06-answer-scrolled
+key ZL
+shot 06b-answer-after-zl
 key A
 shot 07-next-question
 key A
@@ -62,6 +64,10 @@ touch 230 166
 touch 280 19
 touch 80 28
 shot 08g-after-bury
+touch 280 19
+touch 80 214
+shot 08g2-buttons-for-note-type
+key B
 key SELECT
 shot 08h-after-undo-bury
 key START
@@ -73,6 +79,18 @@ shot 11-settings
 key DOWN
 key RIGHT
 shot 12-settings-night
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key A
+shot 12b-buttons
+key DOWN
+key DOWN
+key RIGHT
+shot 12c-buttons-zl-changed
+key LEFT
+key B
 key B
 select Malleus Clinical Medicine
 key A

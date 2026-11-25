@@ -199,7 +199,12 @@ hr#answer { margin: 8px 0; }
 table { border-collapse: collapse; }
 sub, sup { font-size: 75%; }
 .mjx { white-space: nowrap; }
-.mjx-frac sup, .mjx-frac sub { font-size: 75%; }
+.mjx-frac { display: inline-table; vertical-align: middle; border-collapse: collapse; font-size: 85%; margin: 0 2px; }
+.mjx-frac .mjx-frac { font-size: 100%; }
+.mjx-dfrac { font-size: 100%; }
+.mjx-row { display: table-row; }
+.mjx-num, .mjx-den { display: table-cell; text-align: center; padding: 0 2px; line-height: 1.2; white-space: nowrap; }
+.mjx-num { border-bottom: 1px solid; }
 a { color: #1a5fb4; text-decoration: none; }
 #image-occlusion-container { position: relative; display: inline-block; }
 #image-occlusion-container img { display: block; max-width: 100%; }

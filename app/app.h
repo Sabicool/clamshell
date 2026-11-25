@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "buttons.h"
 #include "collection.h"
 #include "queue.h"
 #include "render/card_view.h"
@@ -62,11 +63,13 @@ struct Settings {
     bool reveal_hidden = false;  // show sections templates hide behind JS buttons
     bool run_scripts = true;     // run card templates' JavaScript (QuickJS)
     bool scratchpad = false;     // bottom screen is a stylus scratchpad while reviewing
+    ButtonMap buttons = default_buttons();         // for every note type
+    std::map<std::string, ButtonMap> nt_buttons;   // note type id -> its own set
     void load(const std::string& path);
     void save(const std::string& path) const;
 };
 
-enum class Mode { Setup, Decks, Review, Done, Settings, Message, ConfirmDownload };
+enum class Mode { Setup, Decks, Review, Done, Settings, Message, ConfirmDownload, Buttons };
 
 class App {
 public:
@@ -143,6 +146,19 @@ private:
     void on_menu(const Input& in);
     void draw_menu();
     void card_action(Scheduler::CardOp op, int flag = 0);
+
+    // button assignments (app/buttons.h)
+    int64_t current_mid_ = 0;  // note type of the card on screen
+    std::string current_nt_name_;
+    std::string action_for(const std::string& button) const;
+    void run_action(const std::string& action);
+    std::string button_hints() const;
+    int btn_sel_ = 0;
+    int64_t btn_mid_ = 0;  // 0: editing the set for all note types
+    Mode btn_return_ = Mode::Settings;
+    void open_buttons(int64_t mid, Mode ret);
+    void on_buttons(const Input& in);
+    void draw_buttons();
     bool answer_shown_ = false;
     int scroll_ = 0;
     int64_t shown_at_ms_ = 0;

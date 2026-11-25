@@ -163,7 +163,7 @@ int main() {
     FILE* sf = fopen((dir + "/selftest.txt").c_str(), "r");
     char linebuf[512];
     struct K { const char* n; uint32_t k; } keys[] = {{"A", K_A}, {"B", K_B}, {"X", K_X}, {"Y", K_Y}, {"L", K_L}, {"R", K_R},
-        {"UP", K_UP}, {"DOWN", K_DOWN}, {"LEFT", K_LEFT}, {"RIGHT", K_RIGHT}, {"START", K_START}, {"SELECT", K_SELECT}, {"ZR", K_ZR}};
+        {"UP", K_UP}, {"DOWN", K_DOWN}, {"LEFT", K_LEFT}, {"RIGHT", K_RIGHT}, {"START", K_START}, {"SELECT", K_SELECT}, {"ZR", K_ZR}, {"ZL", K_ZL}};
     auto keyof = [&](const std::string& n) -> uint32_t { for (auto& k : keys) if (n == k.n) return k.k; return 0; };
     while (sf && fgets(linebuf, sizeof linebuf, sf) && aptMainLoop()) {
         std::string line = linebuf;

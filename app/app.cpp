@@ -42,6 +42,14 @@ void Settings::load(const std::string& path) {
     tz_auto = j.value("tz_auto", tz_auto);
     run_scripts = j.value("run_scripts", run_scripts);
     scratchpad = j.value("scratchpad", scratchpad);
+    if (j.contains("buttons") && j["buttons"].is_object())
+        for (auto& [k, v] : j["buttons"].items())
+            if (v.is_string()) buttons[k] = v.get<std::string>();
+    if (j.contains("note_type_buttons") && j["note_type_buttons"].is_object())
+        for (auto& [mid, m] : j["note_type_buttons"].items())
+            if (m.is_object())
+                for (auto& [k, v] : m.items())
+                    if (v.is_string()) nt_buttons[mid][k] = v.get<std::string>();
 }
 
 void Settings::save(const std::string& path) const {
@@ -50,6 +58,8 @@ void Settings::save(const std::string& path) const {
               {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}, {"run_scripts", run_scripts},
               {"scratchpad", scratchpad}};
     if (minutes_west) j["minutes_west"] = *minutes_west;
+    j["buttons"] = buttons;
+    j["note_type_buttons"] = nt_buttons;
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return;
     std::string s = j.dump(2);
@@ -215,6 +225,7 @@ bool App::frame(const Input& in) {
             }
             break;
         case Mode::Settings: on_settings(in); break;
+        case Mode::Buttons: on_buttons(in); break;
         case Mode::Message:
             if (in.down & (K_A | K_B) || in.touch_down) {
                 mode_ = message_return_;
@@ -639,7 +650,13 @@ void App::next_card() {
     }
     clear_scratch();
     card_note_.clear();
-    card_marked_ = note_marked(col_.get_note(card_->nid));
+    {
+        auto note = col_.get_note(card_->nid);
+        card_marked_ = note_marked(note);
+        current_mid_ = note ? note->mid : 0;
+        auto nt = col_.notetypes.find(current_mid_);
+        current_nt_name_ = nt != col_.notetypes.end() ? nt->second.name : "";
+    }
     menu_open_ = false;
     states_ = sched_->scheduling_states(*card_);
     labels_ = sched_->describe_next_states(states_);
@@ -839,6 +856,184 @@ void App::card_action(Scheduler::CardOp op, int flag) {
     }
 }
 
+std::string App::action_for(const std::string& button) const {
+    auto nt = settings_.nt_buttons.find(std::to_string(current_mid_));
+    if (nt != settings_.nt_buttons.end()) {
+        auto it = nt->second.find(button);
+        if (it != nt->second.end()) return it->second;
+    }
+    auto it = settings_.buttons.find(button);
+    if (it != settings_.buttons.end()) return it->second;
+    auto d = default_buttons().find(button);
+    return d != default_buttons().end() ? d->second : "none";
+}
+
+void App::run_action(const std::string& a) {
+    using Op = Scheduler::CardOp;
+    if (a == "page_up" || a == "page_down") {
+        scroll_ = std::clamp(scroll_ + (a == "page_up" ? -200 : 200), 0, max_scroll());
+        dirty = true;
+    } else if (a == "extra") {
+        if (!answer_shown_) return;  // extra sections belong to the answer side
+        settings_.reveal_hidden = !settings_.reveal_hidden;
+        settings_.save(settings_path_);
+        int keep = scroll_;
+        render_current();
+        scroll_ = std::min(keep, max_scroll());
+    } else if (a == "undo") {
+        prefetch_.reset();
+        undo();
+    } else if (a == "menu") {
+        menu_open_ = true;
+        dirty = true;
+    } else if (a == "scratchpad") {
+        settings_.scratchpad = !settings_.scratchpad;
+        settings_.save(settings_path_);
+        clear_scratch();
+        dirty = true;
+    } else if (a == "bury") {
+        card_action(Op::BuryCard);
+    } else if (a == "suspend") {
+        card_action(Op::SuspendCard);
+    } else if (a == "mark") {
+        card_action(Op::ToggleMark);
+    } else if (a.rfind("flag:", 0) == 0) {
+        int f = a[5] - '0';
+        card_action(Op::SetFlag, card_ && (card_->flags & 7) == f ? 0 : f);  // pressing again removes it
+    } else if (a.rfind("key:", 0) == 0 && script_) {
+        // the card's script may change shared storage, so the prepared next card is redone
+        prefetch_.reset();
+        if (answer_shown_) prefetch_due_ = true;
+        if (script_->key(a.substr(4))) {
+            current_html_ = script_->html();
+            int keep = scroll_;
+            render_current();
+            scroll_ = std::min(keep, max_scroll());
+        }
+    }
+}
+
+// e.g. "ZL N   ◀▶ ←/→   ZR extra sections"
+std::string App::button_hints() const {
+    std::string out;
+    std::string l = action_for("LEFT"), r = action_for("RIGHT");
+    auto add = [&](const std::string& s) { out += (out.empty() ? "" : "  ·  ") + s; };
+    for (const char* b : {"L", "R", "ZL", "ZR"}) {
+        std::string a = action_for(b);
+        if (a == "none") continue;
+        if (std::string(b) == "L" && a == "page_up" && action_for("R") == "page_down") {
+            add("L/R page");
+            continue;
+        }
+        if (std::string(b) == "R" && a == "page_down" && action_for("L") == "page_up") continue;
+        add(std::string(b) + " " + action_short_label(a));
+    }
+    if (l != "none" || r != "none") {
+        if (l.rfind("key:", 0) == 0 && r.rfind("key:", 0) == 0)
+            add("◀▶ " + action_short_label(l) + "/" + action_short_label(r));
+        else {
+            if (l != "none") add("◀ " + action_short_label(l));
+            if (r != "none") add("▶ " + action_short_label(r));
+        }
+    }
+    return out;
+}
+
+void App::open_buttons(int64_t mid, Mode ret) {
+    btn_mid_ = mid;
+    btn_return_ = ret;
+    btn_sel_ = 0;
+    menu_open_ = false;
+    mode_ = Mode::Buttons;
+    dirty = true;
+}
+
+void App::on_buttons(const Input& in) {
+    const auto& btns = assignable_buttons();
+    std::string key = std::to_string(btn_mid_);
+    bool own = btn_mid_ && settings_.nt_buttons.count(key);
+    int rows = (int)btns.size() + (btn_mid_ ? 1 : 0);  // last row: back to the shared set
+    if (in.down & K_DOWN) btn_sel_ = (btn_sel_ + 1) % rows;
+    if (in.down & K_UP) btn_sel_ = (btn_sel_ + rows - 1) % rows;
+    if (in.down & (K_B | K_START | K_SELECT)) {
+        settings_.save(settings_path_);
+        mode_ = btn_return_;
+        dirty = true;
+        return;
+    }
+    if (btn_sel_ == (int)btns.size()) {
+        if ((in.down & K_A) && own) {
+            settings_.nt_buttons.erase(key);
+            settings_.save(settings_path_);
+        }
+        return;
+    }
+    int delta = (in.down & K_RIGHT) ? 1 : (in.down & K_LEFT) ? -1 : (in.down & K_R) ? 10 : (in.down & K_L) ? -10 : 0;
+    if (!delta) return;
+    const auto& acts = button_actions();
+    const char* id = btns[btn_sel_].id;
+    ButtonMap& target = btn_mid_ ? settings_.nt_buttons[key] : settings_.buttons;
+    if (btn_mid_ && !own) {
+        // start this note type's set from the shared one
+        for (auto& b : btns) {
+            auto it = settings_.buttons.find(b.id);
+            target[b.id] = it != settings_.buttons.end() ? it->second : default_buttons().at(b.id);
+        }
+    }
+    std::string cur = target.count(id) ? target[id] : default_buttons().at(id);
+    int i = 0;
+    for (int j = 0; j < (int)acts.size(); j++)
+        if (acts[j] == cur) i = j;
+    int n = (int)acts.size();
+    target[id] = acts[((i + delta) % n + n) % n];
+    settings_.save(settings_path_);
+}
+
+void App::draw_buttons() {
+    const Theme& t = theme(settings_.night);
+    top.resize(400, 240, t.bg);
+    std::string key = std::to_string(btn_mid_);
+    bool own = btn_mid_ && settings_.nt_buttons.count(key);
+    std::string scope = !btn_mid_ ? "All note types" : fit(fonts_, current_nt_name_, 13, 240);
+    draw_header(top, "Buttons", scope);
+    const auto& btns = assignable_buttons();
+    auto effective = [&](const char* id) {
+        if (btn_mid_ && own) {
+            auto& m = settings_.nt_buttons.at(key);
+            if (m.count(id)) return m.at(id);
+        }
+        auto it = settings_.buttons.find(id);
+        return it != settings_.buttons.end() ? it->second : default_buttons().at(id);
+    };
+    for (int i = 0; i < (int)btns.size(); i++) {
+        int y = 34 + i * 28;
+        bool sel = i == btn_sel_;
+        if (sel) top.fill_round_rect(4, y, 392, 26, 6, t.accent);
+        uint32_t tc = sel ? t.accent_text : t.text;
+        text(top, fonts_, 16, (float)y + 5, btns[i].label, 15, tc, FACE_SANS_BOLD);
+        std::string v = "‹ " + action_label(effective(btns[i].id)) + " ›";
+        text(top, fonts_, 386 - text_w(fonts_, v, 14), (float)y + 5, v, 14, tc);
+    }
+    if (btn_mid_) {
+        int y = 34 + (int)btns.size() * 28;
+        bool sel = btn_sel_ == (int)btns.size();
+        if (sel) top.fill_round_rect(4, y, 392, 26, 6, t.accent);
+        std::string label = own ? "Use the set for all note types (A)" : "Using the set for all note types";
+        text(top, fonts_, 16, (float)y + 5, label, 14, sel ? t.accent_text : t.dim);
+    }
+    bottom.resize(320, 240, t.bg);
+    std::string help =
+        !btn_mid_ ? "What these buttons do while reviewing. ◀ ▶ change, L/R jump 10. \"Card key\" sends that keyboard key "
+                    "to the card, for decks with their own shortcuts (Malleus: N reveals the next cloze on the front and "
+                    "the next resource on the back; AnKing: C shows tags). Each note type can have its own set: open "
+                    "More > Buttons while reviewing."
+                  : own ? "These apply only to this note type. Changing one here doesn't affect other decks."
+                        : "Change any button to give this note type its own set, starting from the set for all note "
+                          "types.";
+    paragraph(bottom, fonts_, 14, 14, 292, help, 13, t.dim);
+    text(bottom, fonts_, 14, 216, "B: back", 12, t.dim);
+}
+
 void App::on_menu(const Input& in) {
     using Op = Scheduler::CardOp;
     if (in.down & (K_B | K_START)) {
@@ -862,7 +1057,9 @@ void App::on_menu(const Input& in) {
         clear_scratch();
         menu_open_ = false;
         dirty = true;
-    } else if (hit({8, 194, 304, 40}, x, y)) {
+    } else if (hit({8, 194, 148, 40}, x, y)) {
+        open_buttons(current_mid_, Mode::Review);
+    } else if (hit({164, 194, 148, 40}, x, y)) {
         menu_open_ = false;
         dirty = true;
     }
@@ -889,7 +1086,8 @@ void App::draw_menu() {
     button(bottom, fonts_, {{8, 146, 148, 40}, card_marked_ ? "Unmark note" : "Mark note", "", ""}, settings_.night);
     button(bottom, fonts_, {{164, 146, 148, 40}, settings_.scratchpad ? "Scratchpad off" : "Scratchpad on", "", ""},
            settings_.night);
-    button(bottom, fonts_, {{8, 194, 304, 40}, "Close", "", "B", t.hard}, settings_.night);
+    button(bottom, fonts_, {{8, 194, 148, 40}, "Buttons…", "", ""}, settings_.night);
+    button(bottom, fonts_, {{164, 194, 148, 40}, "Close", "", "B", t.hard}, settings_.night);
 }
 
 void App::on_review(const Input& in) {
@@ -929,8 +1127,6 @@ void App::on_review(const Input& in) {
     int step = 0;
     if (in.held & K_DOWN) step += 6;
     if (in.held & K_UP) step -= 6;
-    if (in.down & K_R) step += 200;
-    if (in.down & K_L) step -= 200;
     step += in.scroll;
     if (step) {
         int ns = std::clamp(scroll_ + step, 0, max_scroll());
@@ -951,27 +1147,16 @@ void App::on_review(const Input& in) {
         return;
     }
     Rect reveal_r{10, 112, 300, 34};
-    if (answer_shown_ &&
-        ((in.down & K_ZR) || (in.touch_down && !settings_.scratchpad && hit(reveal_r, in.tx, in.ty)))) {
-        settings_.reveal_hidden = !settings_.reveal_hidden;
-        settings_.save(settings_path_);
-        int keep = scroll_;
-        render_current();
-        scroll_ = std::min(keep, max_scroll());
+    if (answer_shown_ && in.touch_down && !settings_.scratchpad && hit(reveal_r, in.tx, in.ty)) {
+        run_action("extra");
         return;
     }
-    // ◀ ▶ go to the card's own keyboard shortcuts (e.g. Malleus one-by-one reveal)
-    if (script_ && (in.down & (K_LEFT | K_RIGHT))) {
-        prefetch_.reset();
-        if (answer_shown_) prefetch_due_ = true;
-        if (script_->key((in.down & K_RIGHT) ? "ArrowRight" : "ArrowLeft")) {
-            current_html_ = script_->html();
-            int keep = scroll_;
-            render_current();
-            scroll_ = std::min(keep, max_scroll());
+    // L, R, ZL, ZR, ◀, ▶: whatever they're assigned to (Settings > Buttons)
+    for (auto& b : assignable_buttons())
+        if (in.down & b.key) {
+            run_action(action_for(b.id));
+            return;
         }
-        return;
-    }
     auto buttons = review_buttons();
     int touched = -1;
     if (in.touch_down && !settings_.scratchpad)
@@ -1055,8 +1240,7 @@ void App::draw_review() {
     if (!card_note_.empty())
         text(bottom, fonts_, 12, 50, fit(fonts_, card_note_, 12, 296), 12, t.accent, FACE_SANS_BOLD);
     else
-        text(bottom, fonts_, 12, 50, script_ ? "↑↓ scroll   L/R page   ◀▶ card keys" : "↑↓ / circle pad: scroll   L/R: page",
-             12, t.dim);
+        text(bottom, fonts_, 12, 50, fit(fonts_, button_hints(), 12, 296), 12, t.dim);
     text(bottom, fonts_, 12, 68, sched_ && sched_->can_undo() ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
     if (max_scroll() > 0 && scroll_ < max_scroll())
         text(bottom, fonts_, 12, 90, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
@@ -1082,9 +1266,9 @@ void App::draw_done() {
 // ---------------------------------------------------------------- settings
 
 static const char* SETTING_NAMES[] = {"Text size",          "Night mode",        "Time zone",
-                                      "Download images automatically", "Run card scripts", "Sign in again",
-                                      "Replace this 3DS copy with the server's", "About"};
-static const int SETTING_COUNT = 8;
+                                      "Download images automatically", "Run card scripts", "Buttons",
+                                      "Sign in again", "Replace this 3DS copy with the server's", "About"};
+static const int SETTING_COUNT = 9;
 
 void App::on_settings(const Input& in) {
     if (in.down & K_DOWN) setting_sel_ = (setting_sel_ + 1) % SETTING_COUNT;
@@ -1122,15 +1306,18 @@ void App::on_settings(const Input& in) {
             if (delta || activate) settings_.run_scripts = !settings_.run_scripts;
             break;
         case 5:
-            if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
+            if (activate || delta) open_buttons(0, Mode::Settings);
             break;
         case 6:
+            if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
+            break;
+        case 7:
             if (activate) {
                 if (settings_.hkey.empty()) show_message("Not signed in", "Sign in first.", Mode::Settings);
                 else full_download_flow();
             }
             break;
-        case 7:
+        case 8:
             if (activate)
                 show_message("About Anki for 3DS",
                              "An unofficial Anki client. Scheduling is a port of Anki 26.08 (FSRS, load balancer, "
@@ -1147,11 +1334,11 @@ void App::draw_settings() {
     top.resize(400, 240, t.bg);
     draw_header(top, "Settings", settings_.username);
     for (int i = 0; i < SETTING_COUNT; i++) {
-        int y = 30 + i * 26;
+        int y = 28 + i * 23;
         bool sel = i == setting_sel_;
-        if (sel) top.fill_round_rect(4, y, 392, 24, 6, t.accent);
+        if (sel) top.fill_round_rect(4, y, 392, 22, 6, t.accent);
         uint32_t tc = sel ? t.accent_text : t.text;
-        text(top, fonts_, 14, (float)y + 4, SETTING_NAMES[i], 14, tc);
+        text(top, fonts_, 14, (float)y + 3, SETTING_NAMES[i], 14, tc);
         std::string value;
         switch (i) {
             case 0: value = "‹ " + std::to_string((int)std::lround(settings_.text_zoom * 100)) + "% ›"; break;
@@ -1161,10 +1348,11 @@ void App::draw_settings() {
                 break;
             case 3: value = settings_.auto_media ? "On" : "Off"; break;
             case 4: value = settings_.run_scripts ? "On" : "Off"; break;
-            case 5: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
+            case 5: value = "›"; break;
+            case 6: value = settings_.hkey.empty() ? "Not signed in" : "Signed in"; break;
             default: break;
         }
-        if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 4, value, 14, tc);
+        if (!value.empty()) text(top, fonts_, 386 - text_w(fonts_, value, 14), (float)y + 3, value, 14, tc);
     }
     bottom.resize(320, 240, t.bg);
     std::string help;
@@ -1181,8 +1369,12 @@ void App::draw_settings() {
             help = "Runs the JavaScript in card templates (for example Malleus one-by-one clozes: press ▶ to reveal "
                    "the next line, ◀ to hide it). Turn off if a deck's cards misbehave.";
             break;
-        case 5: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
-        case 6:
+        case 5:
+            help = "Choose what L, R, ZL, ZR and ◀ ▶ do while reviewing: page, extra sections, undo, flags, or a "
+                   "keyboard key for decks with their own shortcuts. Press A to open.";
+            break;
+        case 6: help = "Sign in again, e.g. after changing your password. Server: " + settings_.endpoint; break;
+        case 7:
             help = "Downloads the whole collection from the sync server again. Reviews on this 3DS that haven't "
                    "been synced will be lost.";
             break;
@@ -1211,6 +1403,7 @@ void App::draw() {
         case Mode::Review: draw_review(); break;
         case Mode::Done: draw_done(); break;
         case Mode::Settings: draw_settings(); break;
+        case Mode::Buttons: draw_buttons(); break;
         case Mode::Message: draw_message(); break;
         case Mode::ConfirmDownload: {
             const Theme& t = theme(settings_.night);

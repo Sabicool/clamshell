@@ -181,8 +181,8 @@ Object.assign(g, {
   console: { log: (...a) => N.log(a.map(String).join(' ')), info: (...a) => N.log(a.map(String).join(' ')), debug(){},
     warn: (...a) => N.log('warn: ' + a.map(String).join(' ')), error: (...a) => N.log('error: ' + a.map(String).join(' ')) },
 });
-globalThis.__dispatchKey = function(code, key, keyCode){ const target = document.body;
-  for (const type of ['keydown', 'keyup']) { const e = new KeyboardEvent(type, { key, code, keyCode, which: keyCode, bubbles: true }); e.target = target; target.dispatchEvent(e); } };
+globalThis.__dispatchKey = function(code, key, keyCode, altKey){ const target = document.body;
+  for (const type of ['keydown', 'keyup']) { const e = new KeyboardEvent(type, { key, code, keyCode, which: keyCode, altKey: !!altKey, bubbles: true }); e.target = target; target.dispatchEvent(e); } };
 globalThis.__beforeScripts = function(){ g.onUpdateHook = []; g.onShownHook = []; };
 globalThis.__afterScripts = function(first){ if (first) for (const t of ['DOMContentLoaded', 'load']) { const e = new Event(t, { bubbles: false }); e.target = document; document._fire(e); win._fire(e); }
   for (const f of g.onUpdateHook.concat(g.onShownHook)) { try { f(); } catch (e) { console.error(String(e)); } } };
@@ -501,15 +501,26 @@ void CardScript::sync_storage_out() {
     JS_FreeValue(impl_->ctx, v);
 }
 
-bool CardScript::key(const std::string& code) {
+bool CardScript::key(const std::string& spec) {
     if (!impl_ || !impl_->ctx) return false;
     int before = impl_->dom.version;
-    int key_code = code == "ArrowLeft" ? 37 : code == "ArrowUp" ? 38 : code == "ArrowRight" ? 39 : code == "ArrowDown" ? 40
-                 : code.size() == 4 && code.compare(0, 3, "Key") == 0 ? code[3] : 0;
-    std::string key = code.compare(0, 3, "Key") == 0 && code.size() == 4 ? std::string(1, (char)tolower(code[3])) : code;
+    // spec is a KeyboardEvent.code, optionally "Alt+"-prefixed: KeyN, Digit1, ArrowLeft, Alt+Digit3
+    bool alt = spec.rfind("Alt+", 0) == 0;
+    std::string code = alt ? spec.substr(4) : spec;
+    std::string key = code;
+    int key_code = 0;
+    if (code == "ArrowLeft") key_code = 37;
+    else if (code == "ArrowUp") key_code = 38;
+    else if (code == "ArrowRight") key_code = 39;
+    else if (code == "ArrowDown") key_code = 40;
+    else if (code == "Space") key = " ", key_code = 32;
+    else if (code == "Enter") key_code = 13;
+    else if (code == "Escape") key_code = 27;
+    else if (code.size() == 4 && code.compare(0, 3, "Key") == 0) key = std::string(1, (char)tolower(code[3])), key_code = code[3];
+    else if (code.size() == 6 && code.compare(0, 5, "Digit") == 0) key = std::string(1, code[5]), key_code = code[5];
     nlohmann::json args = {code, key};
     std::string js = "__dispatchKey(" + args[0].dump() + ", " + args[1].dump() + ", " + std::to_string(key_code) +
-                     "); __runTimers(200);";
+                     ", " + (alt ? "true" : "false") + "); __runTimers(200);";
     impl_->set_deadline(1000);
     impl_->eval(js, "key", log_);
     sync_storage_out();
