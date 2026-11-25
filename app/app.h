@@ -134,6 +134,9 @@ private:
     };
     std::unique_ptr<Prefetch> prefetch_;
     bool prefetch_due_ = false;
+    int unsynced_reviews_ = 0;  // shown before a full download replaces this copy
+    bool download_requested_ = false;  // chosen in Settings rather than required by the server
+    void confirm_download(bool requested);
     void prefetch_next();
 
     // touch menu (bury, suspend, flag, mark, scratchpad) and the scratchpad itself

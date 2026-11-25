@@ -234,7 +234,7 @@ bool App::frame(const Input& in) {
             break;
         case Mode::ConfirmDownload:
             if (in.down & K_A) full_download_flow();
-            else if (in.down & K_B) mode_ = Mode::Decks;
+            else if (in.down & K_B) mode_ = download_requested_ ? Mode::Settings : Mode::Decks;
             break;
     }
     if (dirty) draw();
@@ -278,9 +278,12 @@ void App::progress(const std::string& title, const std::string& detail) {
 
 void App::on_setup(const Input& in) {
     Button own{{20, 50, 280, 56}, "Sign in to my sync server", "", "A"};
-    Button web{{20, 140, 280, 40}, "Sign in to AnkiWeb", "", "X"};
     if ((in.down & K_A) || (in.touch_down && hit(own.r, in.tx, in.ty))) login_flow(true);
-    else if ((in.down & K_X) || (in.touch_down && hit(web.r, in.tx, in.ty))) login_flow(false);
+#ifdef ANKI3DS_ANKIWEB
+    // AnkiWeb sign-in is only compiled in with permission from the Anki team (see README)
+    Button web{{20, 140, 280, 40}, "Sign in to AnkiWeb", "", "X"};
+    if ((in.down & K_X) || (in.touch_down && hit(web.r, in.tx, in.ty))) login_flow(false);
+#endif
 }
 
 void App::draw_setup() {
@@ -298,9 +301,26 @@ void App::draw_setup() {
     bottom.resize(320, 240, t.bg);
     button(bottom, fonts_, {{20, 50, 280, 56}, "Sign in to my sync server", "", "A"}, settings_.night);
     text_centered(bottom, fonts_, {20, 108, 280, 20}, "e.g. http://192.168.1.20:8080/", 12, t.dim);
+#ifdef ANKI3DS_ANKIWEB
     button(bottom, fonts_, {{20, 140, 280, 40}, "Sign in to AnkiWeb", "", "X", t.hard}, settings_.night);
-    text_centered(bottom, fonts_, {20, 182, 280, 20}, "Only with permission from AnkiWeb", 12, t.dim);
+#else
+    paragraph(bottom, fonts_, 24, 140, 272,
+              "AnkiWeb isn't available: its terms only allow Anki's own apps. Point your other devices at the "
+              "same sync server instead.",
+              12, t.dim);
+#endif
     text_centered(bottom, fonts_, {0, 214, 320, 20}, "Press HOME to exit", 12, t.dim);
+}
+
+void App::confirm_download(bool requested) {
+    unsynced_reviews_ = 0;
+    if (col_.is_open()) {
+        Stmt s(col_.db(), "select count() from revlog where usn = -1");
+        if (s.step()) unsynced_reviews_ = (int)s.i64(0);
+    }
+    download_requested_ = requested;
+    mode_ = Mode::ConfirmDownload;
+    dirty = true;
 }
 
 void App::login_flow(bool custom_server) {
@@ -388,7 +408,7 @@ void App::sync_flow() {
         }
         case SyncStatus::FullSyncRequired:
             if (r.download_ok) {
-                mode_ = Mode::ConfirmDownload;
+                confirm_download(false);
             } else {
                 show_message("Can't sync",
                              "The server's collection is empty. Sync from desktop Anki first.", Mode::Decks);
@@ -704,6 +724,14 @@ CardViewOptions App::view_options() const {
 void App::render_current() {
     view_->render(current_html_, rendered_.css, rendered_.ord, view_options());
     dirty = true;
+#ifdef ANKI3DS_SELFTEST
+    if (FILE* f = fopen((pf_.data_dir() + "/timing.txt").c_str(), "ab")) {
+        const Canvas& cv = view_->canvas();
+        fprintf(f, "render night=%d view=%p px=%08x\n", (int)settings_.night, (void*)view_.get(),
+                cv.data()[(size_t)std::min(cv.height() - 1, 200) * cv.width() + 10]);
+        fclose(f);
+    }
+#endif
 }
 
 void App::prefetch_next() {
@@ -1309,12 +1337,16 @@ void App::on_settings(const Input& in) {
             if (activate || delta) open_buttons(0, Mode::Settings);
             break;
         case 6:
+#ifdef ANKI3DS_ANKIWEB
             if (activate) login_flow(settings_.endpoint != "https://sync.ankiweb.net/");
+#else
+            if (activate) login_flow(true);
+#endif
             break;
         case 7:
             if (activate) {
                 if (settings_.hkey.empty()) show_message("Not signed in", "Sign in first.", Mode::Settings);
-                else full_download_flow();
+                else confirm_download(true);
             }
             break;
         case 8:
@@ -1408,11 +1440,23 @@ void App::draw() {
         case Mode::ConfirmDownload: {
             const Theme& t = theme(settings_.night);
             top.resize(400, 240, t.bg);
-            text_centered(top, fonts_, {0, 30, 400, 30}, "Full download needed", 20, t.text, FACE_SANS_BOLD);
+            text_centered(top, fonts_, {0, 30, 400, 30},
+                          download_requested_ ? "Replace this copy?" : "Full download needed", 20, t.text,
+                          FACE_SANS_BOLD);
+            std::string lost = unsynced_reviews_ == 0
+                                   ? "Nothing done on this 3DS is waiting to sync, so no reviews will be lost."
+                               : unsynced_reviews_ == 1
+                                   ? "1 review done on this 3DS since the last sync will be lost."
+                                   : std::to_string(unsynced_reviews_) +
+                                         " reviews done on this 3DS since the last sync will be lost.";
             paragraph(top, fonts_, 30, 75, 340,
-                      "The server's collection changed in a way that can't be merged (for example a note type was "
-                      "edited on desktop). Download the server's copy to replace the one on this 3DS?\n\nReviews "
-                      "done on this 3DS since the last successful sync will be lost.",
+                      std::string(download_requested_
+                                      ? "Download the whole collection from the sync server and replace the one "
+                                        "on this 3DS?"
+                                      : "The server's collection changed in a way that can't be merged (for "
+                                        "example a note type was edited on desktop). Download the server's copy "
+                                        "to replace the one on this 3DS?") +
+                          "\n\n" + lost,
                       14, t.text);
             bottom.resize(320, 240, t.bg);
             button(bottom, fonts_, {{20, 60, 280, 50}, "Download from server", "", "A", t.again}, settings_.night);
