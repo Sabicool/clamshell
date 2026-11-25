@@ -26,7 +26,9 @@ from synctest import PORT, wait_port  # noqa: E402
 
 from anki.collection import Collection  # noqa: E402
 
-SHOTS = os.path.join(ROOT, "build", "emu-shots")
+# EMU_SHOTS and EMU_SCRIPT (a file of self-test commands) override the defaults;
+# tools/screenshots.py uses them for the README pictures.
+SHOTS = os.environ.get("EMU_SHOTS") or os.path.join(ROOT, "build", "emu-shots")
 ENDPOINT = f"http://127.0.0.1:{PORT}/"
 
 SCRIPT = f"""
@@ -116,7 +118,10 @@ def main():
             revlog_before = desk.db.scalar("select count() from revlog")
             print("server ready; desktop review log rows:", revlog_before)
 
-            open(os.path.join(sd, "selftest.txt"), "w").write(SCRIPT)
+            script = SCRIPT
+            if os.environ.get("EMU_SCRIPT"):
+                script = open(os.environ["EMU_SCRIPT"]).read().replace("{ENDPOINT}", ENDPOINT)
+            open(os.path.join(sd, "selftest.txt"), "w").write(script)
             # Azahar fails to load paths containing spaces, so copy the build
             selftest = os.path.join(tmp, "anki3ds-selftest.3dsx")
             shutil.copy(os.path.join(ROOT, "3ds", "anki3ds-selftest.3dsx"), selftest)

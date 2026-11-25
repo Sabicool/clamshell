@@ -1,115 +1,112 @@
 # Anki for 3DS
 
-An unofficial Anki client for the New Nintendo 3DS (homebrew). It reviews your real Anki collection with the same FSRS scheduling as desktop Anki, renders cards' HTML and CSS (including tables, images, image occlusion masks and simple MathJax), runs card templates' JavaScript, and syncs with an Anki sync server.
+An unofficial [Anki](https://apps.ankiweb.net/) client for the New Nintendo 3DS. It reviews your own Anki collection with exactly the same scheduling as desktop Anki (FSRS included), shows cards with their HTML, CSS, images, MathJax and template JavaScript, and syncs with an Anki sync server so reviews carry over to your other devices.
 
-Status: alpha (0.2.0). Everything below "Verified" was tested on a Mac against the real Anki 26.08 engine, and the real 3DS build has run end to end in the Azahar emulator; nothing has run on 3DS hardware yet.
+**Status: alpha (0.2.0).** It works day to day on a New 3DS, but expect rough edges, and keep backups of your collection as you would with any new client. It isn't made by or affiliated with the Anki team.
 
-## Verified on the Mac
+<p align="center"><img src="docs/screenshots/overview.png" alt="Deck list, a card with a stacked fraction, a card with an image, and night mode" width="100%"></p>
+<p align="center"><img src="docs/screenshots/features.png" alt="The More menu, the stylus scratchpad, button settings and the settings screen" width="100%"></p>
 
-- **Scheduling matches desktop Anki exactly.** `tools/difftest.py` compares this code with the official `anki` 26.08 Python package (the same Rust engine as desktop). On a copy of a real 17,000-card FSRS collection, all 9,335 active cards produce identical next states (intervals, stability, difficulty, steps), with fuzz on. The study queue is a port of Anki's queue builder too: studying a deck with the 3DS picking its own cards (Malleus: 65 cards; CICM Primary, with learning steps; and a filtered deck: 41 cards) chose the same cards in the same order as Anki, with identical card rows and review-log rows afterwards.
-- **Sync round trip.** `tools/synctest.py` runs Anki's own sync server locally: desktop uploads, the 3DS client downloads, both sides study and edit, both sync. Afterwards all cards, notes, review-log rows and decks are identical on both sides (decks differ from before only in their studied-today counters, so daily limits carry across devices), and the 3DS file passes SQLite's integrity check. Per-deck image download is checked byte for byte.
-- **Deck counts** (new/learning/due) match desktop for all 432 decks in the test collection.
-- **Card rendering**: `anki3ds-cli shot` renders cards to PNG with the same code the 3DS uses. Malleus cloze cards, tables, images, Image Occlusion Enhanced and Anki's built-in Image Occlusion render correctly.
-- **Card scripts**: Malleus's template JavaScript runs under QuickJS; one-by-one cloze cards reveal line by line with ▶ and hide with ◀, as on desktop.
-- **The app's screens and flows** run in a desktop simulator (`tools/uitest.py`): sign in, download, deck list, study, answer, sync, settings. Screenshots go to `build/ui-shots/`.
-- **The 3DS network code** (`3ds/source/http_3ds.cpp`: sockets, mbedTLS, chunked downloads) was compiled for the Mac with a small shim and passed the same sync test, including the 76 MB collection download. Its TLS accepts valid certificates and rejects expired or wrong-host ones.
-- **Bury, suspend, flags and mark** (`tools/opstest.py`) give the same card and note rows as Anki, including burying a note with a suspended card and suspending a buried one. Sibling burying when answering matches Anki too.
-- The 3DS build (`make -C 3ds`) compiles and links with devkitARM r68.
-- **The real 3DS build runs in the Azahar emulator** (`tools/emutest.py`): it signs in to a local sync server, downloads a copy of a 17,000-card collection (76 MB), opens Malleus, renders and answers four cards, syncs, and the four reviews arrive on desktop. Screenshots come from the emulated framebuffer into `build/emu-shots/`. In the emulator, the next card appears about 0.1 s after answering (it is laid out while you read the answer), opening Malleus takes about 1 s (plus a one-off download of the images for that day's cards) and a sync about 4 s. Emulator timing is only a rough guide to hardware.
+## What it does
 
-## Important: AnkiWeb
+- **Same scheduling as desktop.** The scheduler is a line-by-line port of Anki 26.08: FSRS 6, learning steps, fuzz, the load balancer, sibling burying, daily limits and the study queue's ordering. It's checked against Anki itself (see [How it's tested](#how-its-tested)), so a card answered on the 3DS gets the interval desktop would have given it.
+- **Two-way sync** with an Anki sync server, using Anki's own protocol. Reviews, card changes, deck limits and studied-today counts all sync. Images for the cards you're about to study download automatically.
+- **Cards look like they do on a phone.** HTML and CSS layout (via litehtml), tables, PNG/JPEG/GIF/WebP/SVG images, Image Occlusion, stacked fractions and common MathJax, night mode, and adjustable text size. Cards are presented the way AnkiDroid and AnkiMobile present them, so templates use their small-screen layouts.
+- **Card templates' JavaScript runs** (via QuickJS), so things like Malleus's one-by-one clozes and collapsible resource sections work, driven from the buttons.
+- **Made for the console.** Answer with the face buttons, scroll with the circle pad, and set what L, R, ZL, ZR and ◀ ▶ do, either for every note type or per note type. The touch screen has bury, suspend, flags and mark, and can become a scratchpad for working things out with the stylus.
+- **Safe with your data.** It never replaces the server's copy of your collection. If the two sides can't be merged, it will only offer to download the server's copy, and it tells you how many unsynced reviews that would discard.
 
-AnkiWeb's [terms](https://ankiweb.net/account/terms) currently only allow Anki, AnkiMobile, AnkiDroid and AnkiUniversal to sync; other third-party clients aren't permitted. Exceptions are handled privately by the Anki team (see this [forum thread](https://forums.ankiweb.net/t/what-is-the-process-of-getting-new-clients-approved-for-ankiweb-sync/21350)). The protocol code works with AnkiWeb, but the app defaults to a self-hosted sync server, and the AnkiWeb button says it needs permission. It has never been pointed at AnkiWeb.
+## Syncing: why not AnkiWeb?
 
-A self-hosted server is built into Anki and works with desktop Anki, AnkiDroid and this app ([manual](https://docs.ankiweb.net/sync-server.html)). NixOS also packages it as `services.anki-sync-server`.
+AnkiWeb's [terms](https://ankiweb.net/account/terms) only allow Anki's own apps (desktop Anki, AnkiMobile, AnkiDroid and AnkiUniversal) to sync with it, so this app syncs with a **self-hosted sync server** instead. That server is part of Anki itself ([manual](https://docs.ankiweb.net/sync-server.html)), and desktop Anki, AnkiDroid and AnkiMobile can all use it in place of AnkiWeb, so all your devices stay in step.
 
-## Trying it on your 3DS
+Ways to run one:
 
-You need a 3DS with the Homebrew Launcher (any custom firmware setup).
+- **On your computer while you study**: `tools/run-sync-server.sh` in this repository starts Anki's server on a Mac and prints the address to use (on other systems, `python -m anki.syncserver` does the same; see the manual).
+- **Always on**: on a home server, NAS or Raspberry Pi, with `python -m anki.syncserver` from the `anki` Python package, a container, or on NixOS `services.anki-sync-server`. To sync away from home it needs to be reachable over HTTPS with a real certificate.
 
-1. **Copy the app.** Put `3ds/anki3ds.3dsx` in `sdmc:/3ds/` on the SD card.
-2. **Start a sync server on the Mac.** Run `tools/run-sync-server.sh` (first run asks you to choose a username and password). It prints a URL like `http://192.168.1.20:8080/`.
-3. **Point desktop Anki at it.** In Anki: Preferences → Syncing → Self-hosted sync server → paste the URL. Sync, sign in with the username/password from step 2, and choose **Upload to server** when asked. (To go back to AnkiWeb later, clear that field and sync; Anki will ask which side to keep.)
-4. **On the 3DS:** open Anki 3DS from the Homebrew Launcher → **Sign in to my sync server** → type the URL, username, password. It downloads your collection (a few minutes over 3DS Wi-Fi).
-5. **Check the time.** The 3DS clock has no time zone, so the app uses the offset desktop Anki recorded (Settings → Time zone shows it, marked *auto*). If the clock on the deck list is wrong, fix the 3DS's own date/time in System Settings. Syncs are refused if clocks disagree by more than 5 minutes.
-6. Study a few cards, press X on the deck list to sync, then sync desktop Anki and check the reviews arrived (Browse → card info).
+The app has never connected to AnkiWeb, and AnkiWeb sign-in isn't included in builds unless the Anki team allows it.
 
-If something fails, `sdmc:/3ds/anki3ds/log.txt` records every error message shown.
+## Getting started
 
-Quicker look without a server: close desktop Anki, copy your `collection.anki2` to `sdmc:/3ds/anki3ds/collection.anki2` (and any images you want into `sdmc:/3ds/anki3ds/collection.media/`). The app opens it directly. Reviews made this way can't be synced back, so treat it as a demo copy.
+You need a New 3DS or New 2DS XL with the Homebrew Launcher (any custom firmware set-up, e.g. from [3ds.hacks.guide](https://3ds.hacks.guide/)). Older 3DS models may work but are untested and will be slow.
+
+1. **Install the app.** Copy `anki3ds.3dsx` to `sdmc:/3ds/` on the SD card.
+2. **Start a sync server** (see above) and note its address, e.g. `http://192.168.1.20:8080/`, plus the username and password you gave it.
+3. **Move desktop Anki to it.** Preferences → Syncing → Self-hosted sync server → paste the address, then sync and sign in. The first time, choose **Upload to server**. To go back to AnkiWeb later, clear that field and sync again.
+4. **On the 3DS**, open Anki 3DS from the Homebrew Launcher, choose **Sign in to my sync server**, and enter the address, username and password. It downloads your collection; a large one takes a few minutes over the 3DS's Wi-Fi.
+5. **Check the clock.** The 3DS has no time zone setting, so the app uses the one desktop Anki recorded (Settings → Time zone, marked *auto*). If the time on the deck list is wrong, fix the 3DS's date and time in System Settings; servers refuse to sync when clocks are more than five minutes apart.
+
+Press **X** on the deck list to sync. Anything that goes wrong is written to `sdmc:/3ds/anki3ds/log.txt`.
+
+To just try it without a server, close desktop Anki and copy your `collection.anki2` (and any images, from `collection.media`) into `sdmc:/3ds/anki3ds/`. The app opens it directly, but reviews made that way can't be synced back.
 
 ## Controls
 
-| Screen | Controls |
+| Where | Buttons |
 |---|---|
-| Deck list | ↑↓ choose, ◀▶ collapse/expand, L/R page, **A** study, **X** sync, **Y** download images for the deck, **SELECT** settings, **START** quit |
-| Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, ◀ ▶ send arrow keys to the card (e.g. Malleus one-by-one reveal), **SELECT** undo last answer, **START** back to decks |
-| Answer | **B** Again, **Y** Hard, **A** Good, **X** Easy (or tap the buttons); **ZR** or tap *Show extra sections* to open sections a template hides behind buttons (e.g. Malleus resources) |
-| Question or answer | Tap **More** for bury card/note, suspend card/note, flag colours, mark note and the scratchpad; **SELECT** undoes these too |
-| Scratchpad | Draw on the bottom screen with the stylus, tap **Clear** to wipe it; it clears itself on each new card. **A**/**B**/**Y**/**X** still answer, and the intervals are shown along the bottom |
-| Settings | ↑↓ choose, ◀▶ change, **A** select, **B** back |
+| Deck list | ↑↓ choose · ◀▶ collapse/expand · L/R page · **A** study · **X** sync · **Y** download a deck's images · **SELECT** settings · **START** quit |
+| Question | **A** show answer · ↑↓ or circle pad scroll · **SELECT** undo · **START** back to decks |
+| Answer | **B** Again · **Y** Hard · **A** Good · **X** Easy, or tap the buttons |
+| Shoulder buttons and ◀ ▶ | By default: L/R page up/down, ZL sends N to the card (Malleus: next cloze on the front, next resource on the back), ZR shows the sections templates hide behind buttons, ◀ ▶ send ← → (Malleus: hide/reveal one-by-one clozes). Change them in Settings → Buttons, or per note type from **More → Buttons**. A button can do an app action (page, extra sections, undo, menu, scratchpad, bury, suspend, mark, a flag colour) or send any keyboard key to the card. |
+| Touch screen | **More**: bury card/note, suspend card/note, flag colours, mark note, scratchpad, buttons. **SELECT** undoes these like answers. |
+| Scratchpad | Draw with the stylus; **Clear** wipes it, and it clears itself for each new card. The face buttons still answer, with the intervals shown along the bottom. |
 
-## How it works
+## Known limitations
 
-- `core/` is portable C++17: collection access (SQLite, schema 18), protobuf decoding, the scheduler, sync, templates and the renderer. It builds for the 3DS and for macOS/Linux.
-- `core/queue.cpp` ports Anki's queue builder (limit tree, gathering SQL with Anki's `fnvhash`/retrievability SQL functions, sorting, mixing, learning requeue).
-- `core/states.cpp`, `core/fsrs.cpp`, `core/rng.cpp` are close ports of Anki 26.08's `rslib/src/scheduler/states`, the `fsrs` 6.6.1 crate's inference code, and the parts of Rust's `rand` 0.9 that Anki uses for fuzz and load balancing, so random choices are bit-identical.
-- `core/sync.cpp` implements sync protocol v11 (zstd-compressed JSON over HTTP POST). It never does a full upload; if a full sync is needed it only offers to download.
-- `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml), draws text with stb_truetype and the DejaVu fonts, decodes images with stb_image (PNG, JPEG, GIF), libwebp (WebP, used heavily by Malleus) and nanosvg (SVG, e.g. occlusion masks), and turns `\(...\)` MathJax into Unicode/HTML.
-- Cards are presented like a phone client (`<div id="qa">` wrapper, `mobile` class), so templates such as AnKing's use their small-screen layout.
-- `core/js/` runs template JavaScript with [QuickJS-ng](https://github.com/quickjs-ng/quickjs) against a gumbo-parsed DOM, then hands the resulting HTML to the renderer. Question and answer share one script context, like Anki's reviewer.
-- `app/` is the UI, drawn in software into two canvases. `3ds/source/main.cpp` shows them on the screens; `host/sim.cpp` runs the same app on a Mac with scripted input.
-- `3ds/source/http_3ds.cpp` does HTTP/HTTPS with mbedTLS and a bundled CA list, because the console's own TLS is too old for modern servers.
+- **No Chinese, Japanese or Korean text yet.** The bundled DejaVu fonts don't include those characters, so they show as placeholder boxes.
+- **No audio, no typing in the answer, no card editing**, and animated GIF/WebP images show their first frame.
+- **Buttons inside cards can't be tapped**, because cards are on the top screen, which isn't a touch screen. The keys and *Show extra sections* cover the common cases (Malleus, AnKing).
+- **MathJax is approximated**: symbols, Greek, sub- and superscripts, stacked fractions, roots and `\ce{}` work; more complex layouts show as plain text.
+- **Preview filtered decks** are untested (rescheduling filtered decks work).
+- Cards that have never had FSRS memory states computed (rare, usually old suspended cards) show an error when answered. Saving the deck options on desktop recomputes them.
+- The 3DS's maths library can, in rare edge cases, round an interval one day differently from desktop, as AnkiDroid's can.
 
-## Known limitations (alpha)
+## How it's tested
 
-- **JavaScript runs, but there's no pointer.** Scripts run under QuickJS against a small DOM (elements, classes, styles, events, timers, sessionStorage), and ◀ ▶ reach a card's keyboard shortcuts. The card is on the top screen, which isn't touch-sensitive, so buttons inside cards can't be clicked and are hidden; *Show extra sections* opens the sections Malleus and AnKing hide behind buttons. Scripts can be turned off in Settings.
-- **No audio and no typed answers** yet; animated GIF/WebP images show their first frame. Undo keeps the last 30 answers and card actions of the current session.
-- **Cards that have never had FSRS memory states computed** (rare; usually suspended cards from before FSRS was turned on) show an error when answered. Opening the deck options on desktop and saving recomputes them.
-- **Filtered decks** work for rescheduling decks; preview decks are untested.
-- MathJax support is an approximation (symbols, Greek, sub/superscripts, fractions, roots, `\ce{}`); complex layouts show as plain text.
-- On the 3DS, floating-point maths comes from newlib's libm rather than macOS's, so a 1-day difference in an interval is possible in rare edge cases (AnkiDroid and desktop have the same property).
+The scheduling and sync code are compared with the official `anki` 26.08 Python package, which runs the same Rust engine as desktop Anki. Each check uses copies of collections, never the original.
+
+- `tools/difftest.py`: next states for every active card in a collection must match Anki's, field for field, with fuzz on. On a 17,000-card FSRS collection all 9,335 active cards matched. It also studies whole decks, letting each side pick its own cards, and requires the same cards in the same order and identical card and review-log rows afterwards (tested on a 65-card Malleus session, a deck with learning steps and a filtered deck).
+- `tools/synctest.py`: starts Anki's sync server, uploads from "desktop", downloads on the 3DS code, studies and edits on both sides, syncs both, and requires cards, notes, review logs and decks to end up identical. It runs with both the desktop network code and the 3DS's own (mbedTLS) network code.
+- `tools/opstest.py`: bury, suspend, flags and mark, including edge cases, must give the same rows as Anki.
+- `tools/uitest.py`: walks through every screen in a desktop simulator running the real app code.
+- `tools/emutest.py`: runs the real 3DS build in the [Azahar](https://azahar-emu.org/) emulator against a local sync server: sign in, download, study, use the menu and scratchpad, sync, and check the reviews reached desktop. `tools/screenshots.py` takes this page's screenshots the same way, from a small demo collection.
 
 ## Building
 
-Desktop tools and tests (macOS, needs Xcode command-line tools and curl):
+Desktop tools and tests (macOS or Linux, with a C++17 compiler and libcurl):
 
 ```bash
 make -f Makefile.host
 ```
 
 ```bash
-tools/.venv/bin/python tools/difftest.py
+python3 -m venv tools/.venv && tools/.venv/bin/pip install anki==26.08 pillow
 ```
 
 ```bash
-tools/.venv/bin/python tools/synctest.py
+ANKI_COLLECTION=path/to/collection.anki2 tools/.venv/bin/python tools/difftest.py
 ```
 
-```bash
-tools/.venv/bin/python tools/uitest.py
-```
+`synctest.py`, `uitest.py` and `emutest.py` take the same `ANKI_COLLECTION` (or a path argument); `opstest.py` builds its own collection.
 
-(`python3 -m venv tools/.venv && tools/.venv/bin/pip install anki==26.08 pillow` creates the venv.)
-
-3DS (needs devkitPro with devkitARM and libctru):
+The 3DS app (needs [devkitPro](https://devkitpro.org/) with devkitARM and libctru):
 
 ```bash
 make -C 3ds
 ```
 
-Run the 3DS build in Azahar (portable mode: a `user` folder next to `Azahar.app`) against a throwaway sync server with a copy of a collection:
+That produces `3ds/anki3ds.3dsx`. `make -C 3ds selftest` builds the scripted variant the emulator tests use.
 
-```bash
-make -C 3ds selftest && tools/.venv/bin/python tools/emutest.py path/to/Azahar.app path/to/collection.anki2
-```
+## How it works
 
-Render a card to PNG with the 3DS renderer:
+- `core/` is portable C++17 that builds for both the 3DS and desktop: the collection (SQLite, schema 18), the scheduler (`states.cpp`, `fsrs.cpp`, `rng.cpp`, ported from Anki's `rslib`, the `fsrs` crate and the parts of Rust's `rand` Anki uses, so random choices are bit-identical), the queue builder (`queue.cpp`), sync protocol v11 (`sync.cpp`), templates and media.
+- `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml) and draws it in software: stb_truetype with the DejaVu fonts, stb_image, libwebp and nanosvg, plus a small MathJax-to-HTML converter.
+- `core/js/` runs template JavaScript with [QuickJS-ng](https://github.com/quickjs-ng/quickjs) against a DOM built with gumbo, then hands the resulting HTML to the renderer.
+- `app/` is the interface, drawn into two canvases. `3ds/source/` puts them on the screens and provides the SD card, networking (mbedTLS with a bundled CA list, since the console's own TLS is too old) and input. `host/` runs the same app on a desktop for testing.
 
-```bash
-build/host/anki3ds-cli shot path/to/collection.anki2 <card id> /tmp/card ~/Library/Application\ Support/Anki2/<profile>/collection.media
-```
+## Licence
 
-## Licences
+AGPL-3.0-or-later, because it ports code from Anki, which is AGPL-3.0-or-later. Bundled third-party code keeps its own licence: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence) and the Mozilla CA bundle (MPL-2.0).
 
-This project ports logic from Anki (AGPL-3.0-or-later) and is therefore AGPL-3.0-or-later. Bundled third-party code: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence), Mozilla CA bundle (MPL-2.0).
+This project isn't made or endorsed by Ankitects or the Anki team.

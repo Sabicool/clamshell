@@ -26,7 +26,10 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CLI = os.environ.get("ANKI3DS_CLI") or os.path.join(ROOT, "build", "host", "anki3ds-cli")
-DEFAULT_COL = os.path.expanduser("~/Library/Application Support/Anki2/Sabiqul/collection.anki2")
+# The collection the tests copy (never modify) by default: $ANKI_COLLECTION, or
+# desktop Anki's first profile on a Mac. Every test also takes a path argument.
+DEFAULT_COL = os.environ.get("ANKI_COLLECTION") or os.path.expanduser(
+    "~/Library/Application Support/Anki2/User 1/collection.anki2")
 
 os.environ.pop("ANKI_TEST_MODE", None)  # would disable fuzz in the reference
 
