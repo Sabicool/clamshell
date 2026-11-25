@@ -38,6 +38,10 @@ select Physiology
 key A
 key A
 shot physio-1
+touch 207 19
+drag 160 120 210 60 10
+shot zoom
+key B
 touch 280 19
 shot menu
 touch 230 166
@@ -51,7 +55,7 @@ key A
 key A
 shot physio-2
 touch 280 19
-touch 80 214
+touch 160 214
 shot buttons
 key B
 key START
@@ -71,7 +75,7 @@ key RIGHT
 key B
 """
 
-KEEP = ["decks", "question", "answer-fraction", "physio-1", "physio-2", "menu", "scratchpad", "buttons",
+KEEP = ["decks", "question", "answer-fraction", "physio-1", "physio-2", "menu", "scratchpad", "zoom", "buttons",
         "settings", "night"]
 
 
@@ -92,6 +96,22 @@ def main():
                 shutil.copy(src, os.path.join(OUT, f"{name}.png"))
             else:
                 print("missing", name)
+    # the two strips the README shows
+    from PIL import Image
+
+    def strip(names, out, scale=0.6, gap=16):
+        ims = [Image.open(os.path.join(OUT, n + ".png")).convert("RGB") for n in names]
+        ims = [i.resize((int(i.width * scale), int(i.height * scale)), Image.LANCZOS) for i in ims]
+        w = sum(i.width for i in ims) + gap * (len(ims) - 1)
+        o = Image.new("RGB", (w, max(i.height for i in ims)), (255, 255, 255))
+        x = 0
+        for i in ims:
+            o.paste(i, (x, 0))
+            x += i.width + gap
+        o.save(os.path.join(OUT, out), optimize=True)
+
+    strip(["decks", "answer-fraction", "physio-1", "night"], "overview.png")
+    strip(["menu", "scratchpad", "zoom", "buttons"], "features.png")
     print("screenshots in", OUT)
 
 

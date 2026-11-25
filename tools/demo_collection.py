@@ -64,7 +64,8 @@ def main():
     n = add(cloze, pharm, {"Text": "Elimination half-life: {{c1::\\(t_{1/2} = \\dfrac{0.693 \\times V_d}{CL}\\)}}",
                            "Back Extra": "Doubling the volume of distribution doubles the half-life if clearance is unchanged."})
     due += n.card_ids()
-    n = add(cloze, pharm, {"Text": "A drug with a {{c1::high}} hepatic extraction ratio has clearance limited mostly by "
+    clin = deck("Demo::Clinical")
+    n = add(cloze, clin, {"Text": "A drug with a {{c1::high}} hepatic extraction ratio has clearance limited mostly by "
                                    "{{c2::liver blood flow}}."})
     due += n.card_ids()
     n = add(basic, phys, {"Front": "What does a right shift of the oxyhaemoglobin curve mean?",

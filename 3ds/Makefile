@@ -16,7 +16,7 @@ TP := $(ROOT)/third_party
 BUILD := build
 TARGET := clamshell
 APP_TITLE := Clamshell
-APP_DESC := Anki-compatible flashcards (0.2 alpha)
+APP_DESC := Anki-compatible flashcards (0.3 alpha)
 APP_AUTHOR := Sabiqul
 
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
