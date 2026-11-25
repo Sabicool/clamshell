@@ -1,8 +1,8 @@
-# Anki for 3DS
+# Clamshell
 
-An unofficial [Anki](https://apps.ankiweb.net/) client for the New Nintendo 3DS. It reviews your own Anki collection with exactly the same scheduling as desktop Anki (FSRS included), shows cards with their HTML, CSS, images, MathJax and template JavaScript, and syncs with an Anki sync server so reviews carry over to your other devices.
+An Anki-compatible flashcard client for the New Nintendo 3DS. Clamshell is unofficial: it works with your [Anki](https://apps.ankiweb.net/) collection, but isn't made by the Anki team. It reviews your own Anki collection with exactly the same scheduling as desktop Anki (FSRS included), shows cards with their HTML, CSS, images, MathJax and template JavaScript, and syncs with an Anki sync server so reviews carry over to your other devices.
 
-**Status: alpha (0.2.0).** It works day to day on a New 3DS, but expect rough edges, and keep backups of your collection as you would with any new client. It isn't made by or affiliated with the Anki team.
+**Status: alpha (0.2.0).** It works day to day on a New 3DS, but expect rough edges, and keep backups of your collection as you would with any new client.
 
 <p align="center"><img src="docs/screenshots/overview.png" alt="Deck list, a card with a stacked fraction, a card with an image, and night mode" width="100%"></p>
 <p align="center"><img src="docs/screenshots/features.png" alt="The More menu, the stylus scratchpad, button settings and the settings screen" width="100%"></p>
@@ -31,15 +31,15 @@ The app has never connected to AnkiWeb, and AnkiWeb sign-in isn't included in bu
 
 You need a New 3DS or New 2DS XL with the Homebrew Launcher (any custom firmware set-up, e.g. from [3ds.hacks.guide](https://3ds.hacks.guide/)). Older 3DS models may work but are untested and will be slow.
 
-1. **Install the app.** Copy `anki3ds.3dsx` to `sdmc:/3ds/` on the SD card.
+1. **Install the app.** Copy `clamshell.3dsx` to `sdmc:/3ds/` on the SD card.
 2. **Start a sync server** (see above) and note its address, e.g. `http://192.168.1.20:8080/`, plus the username and password you gave it.
 3. **Move desktop Anki to it.** Preferences → Syncing → Self-hosted sync server → paste the address, then sync and sign in. The first time, choose **Upload to server**. To go back to AnkiWeb later, clear that field and sync again.
-4. **On the 3DS**, open Anki 3DS from the Homebrew Launcher, choose **Sign in to my sync server**, and enter the address, username and password. It downloads your collection; a large one takes a few minutes over the 3DS's Wi-Fi.
+4. **On the 3DS**, open Clamshell from the Homebrew Launcher, choose **Sign in to my sync server**, and enter the address, username and password. It downloads your collection; a large one takes a few minutes over the 3DS's Wi-Fi.
 5. **Check the clock.** The 3DS has no time zone setting, so the app uses the one desktop Anki recorded (Settings → Time zone, marked *auto*). If the time on the deck list is wrong, fix the 3DS's date and time in System Settings; servers refuse to sync when clocks are more than five minutes apart.
 
-Press **X** on the deck list to sync. Anything that goes wrong is written to `sdmc:/3ds/anki3ds/log.txt`.
+Press **X** on the deck list to sync. Anything that goes wrong is written to `sdmc:/3ds/clamshell/log.txt`.
 
-To just try it without a server, close desktop Anki and copy your `collection.anki2` (and any images, from `collection.media`) into `sdmc:/3ds/anki3ds/`. The app opens it directly, but reviews made that way can't be synced back.
+To just try it without a server, close desktop Anki and copy your `collection.anki2` (and any images, from `collection.media`) into `sdmc:/3ds/clamshell/`. The app opens it directly, but reviews made that way can't be synced back.
 
 ## Controls
 
@@ -96,7 +96,7 @@ The 3DS app (needs [devkitPro](https://devkitpro.org/) with devkitARM and libctr
 make -C 3ds
 ```
 
-That produces `3ds/anki3ds.3dsx`. `make -C 3ds selftest` builds the scripted variant the emulator tests use.
+That produces `3ds/clamshell.3dsx`. `make -C 3ds selftest` builds the scripted variant the emulator tests use.
 
 ## How it works
 
@@ -107,6 +107,6 @@ That produces `3ds/anki3ds.3dsx`. `make -C 3ds selftest` builds the scripted var
 
 ## Licence
 
-AGPL-3.0-or-later, because it ports code from Anki, which is AGPL-3.0-or-later. Bundled third-party code keeps its own licence: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence) and the Mozilla CA bundle (MPL-2.0).
+AGPL-3.0-or-later (see [LICENSE](LICENSE)), because it ports code from Anki, which is AGPL-3.0-or-later. Bundled third-party code keeps its own licence: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence) and the Mozilla CA bundle (MPL-2.0).
 
 This project isn't made or endorsed by Ankitects or the Anki team.

@@ -76,7 +76,7 @@ def main():
     app = sys.argv[1]
     src = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_COL
     exe = os.path.join(app, "Contents", "MacOS", "azahar")
-    sd = os.path.join(os.path.dirname(app), "user", "sdmc", "3ds", "anki3ds")
+    sd = os.path.join(os.path.dirname(app), "user", "sdmc", "3ds", "clamshell")
     shutil.rmtree(sd, ignore_errors=True)
     os.makedirs(sd)
     os.makedirs(SHOTS, exist_ok=True)
@@ -123,8 +123,8 @@ def main():
                 script = open(os.environ["EMU_SCRIPT"]).read().replace("{ENDPOINT}", ENDPOINT)
             open(os.path.join(sd, "selftest.txt"), "w").write(script)
             # Azahar fails to load paths containing spaces, so copy the build
-            selftest = os.path.join(tmp, "anki3ds-selftest.3dsx")
-            shutil.copy(os.path.join(ROOT, "3ds", "anki3ds-selftest.3dsx"), selftest)
+            selftest = os.path.join(tmp, "clamshell-selftest.3dsx")
+            shutil.copy(os.path.join(ROOT, "3ds", "clamshell-selftest.3dsx"), selftest)
             # launch through LaunchServices like a normal app (a bare child process stalls)
             subprocess.run(["open", "-n", app, "--args", selftest], check=True)
             emu = None

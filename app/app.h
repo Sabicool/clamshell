@@ -1,4 +1,4 @@
-// The Anki 3DS application: screens, input handling and flows. Platform code
+// The Clamshell application: screens, input handling and flows. Platform code
 // (3ds/source/main.cpp, host/sim.cpp) feeds input and shows the two canvases.
 #pragma once
 #include <cstdint>

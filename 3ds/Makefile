@@ -1,5 +1,5 @@
 # 3DS build (devkitPro devkitARM + libctru). From the repo root:
-#   make -C 3ds            -> 3ds/anki3ds.3dsx (copy to sdmc:/3ds/)
+#   make -C 3ds            -> 3ds/clamshell.3dsx (copy to sdmc:/3ds/)
 #   make -C 3ds clean
 #
 # Library sources are compiled straight from ../third_party so nothing needs
@@ -14,10 +14,10 @@ TOOLS := $(DEVKITPRO)/tools/bin
 ROOT := ..
 TP := $(ROOT)/third_party
 BUILD := build
-TARGET := anki3ds
-APP_TITLE := Anki 3DS
-APP_DESC := Anki flashcards (0.2 alpha)
-APP_AUTHOR := anki-3ds
+TARGET := clamshell
+APP_TITLE := Clamshell
+APP_DESC := Anki-compatible flashcards (0.2 alpha)
+APP_AUTHOR := Sabiqul
 
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 # -ffp-contract=off keeps float rounding identical to desktop Anki's scheduler.
@@ -51,7 +51,7 @@ all: $(TARGET).3dsx
 
 # Self-test build for emulator runs: make -C 3ds selftest
 selftest:
-	$(MAKE) BUILD=build-selftest TARGET=anki3ds-selftest EXTRA_FLAGS=-DANKI3DS_SELFTEST
+	$(MAKE) BUILD=build-selftest TARGET=clamshell-selftest EXTRA_FLAGS=-DANKI3DS_SELFTEST
 
 $(BUILD)/source/%.cpp.o: source/%.cpp
 	@mkdir -p $(dir $@)

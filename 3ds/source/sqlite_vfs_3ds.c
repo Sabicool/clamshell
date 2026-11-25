@@ -93,7 +93,7 @@ static int sd_open(sqlite3_vfs* vfs, const char* name, sqlite3_file* f, int flag
     memset(p, 0, sizeof *p);
     static int temp_counter = 0;
     if (!name) {
-        snprintf(p->path, sizeof p->path, "sdmc:/3ds/anki3ds/tmp-%d.db", temp_counter++);
+        snprintf(p->path, sizeof p->path, "sdmc:/3ds/clamshell/tmp-%d.db", temp_counter++);
         p->delete_on_close = 1;
     } else {
         snprintf(p->path, sizeof p->path, "%s", name);

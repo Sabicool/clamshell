@@ -31,7 +31,7 @@ public:
     explicit SyncClient(std::string endpoint = "https://sync.ankiweb.net/");
     std::string endpoint;
     std::string hkey;
-    std::string client_version = "anki3ds," ANKI3DS_VERSION ",3ds";
+    std::string client_version = APP_ID "," ANKI3DS_VERSION ",3ds";
     std::function<void(const std::string&)> on_progress;  // human-readable stage text
     std::function<void(size_t, size_t)> on_bytes;          // download progress
 

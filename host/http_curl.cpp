@@ -1,4 +1,5 @@
 // libcurl implementation of the sync transport for desktop testing.
+#include "version.h"
 #include <curl/curl.h>
 
 #include <algorithm>
@@ -67,7 +68,7 @@ bool http_post(const std::string& url, const std::map<std::string, std::string>&
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "anki3ds/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, APP_ID "/" ANKI3DS_VERSION);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
     CURLcode rc = curl_easy_perform(curl);
     long code = 0;

@@ -289,7 +289,7 @@ void App::on_setup(const Input& in) {
 void App::draw_setup() {
     const Theme& t = theme(settings_.night);
     top.resize(400, 240, t.bg);
-    text_centered(top, fonts_, {0, 28, 400, 40}, "Anki for 3DS", 30, t.text, FACE_SANS_BOLD);
+    text_centered(top, fonts_, {0, 28, 400, 40}, APP_NAME, 30, t.text, FACE_SANS_BOLD);
     float y = paragraph(top, fonts_, 30, 86, 340,
                         "Sign in to an Anki sync server to download your collection. Reviews you do here sync "
                         "back, using exactly the same scheduling as Anki on your other devices.",
@@ -1351,8 +1351,8 @@ void App::on_settings(const Input& in) {
             break;
         case 8:
             if (activate)
-                show_message("About Anki for 3DS",
-                             "An unofficial Anki client. Scheduling is a port of Anki 26.08 (FSRS, load balancer, "
+                show_message("About " APP_NAME,
+                             "An unofficial, Anki-compatible client, not made by the Anki team. Scheduling is a port of Anki 26.08 (FSRS, load balancer, "
                              "fuzz) verified against the real engine.\n\nUses SQLite, zstd, mbedTLS, litehtml, "
                              "QuickJS, stb, nanosvg, nlohmann/json and DejaVu fonts.",
                              Mode::Settings);

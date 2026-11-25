@@ -8,6 +8,9 @@
 #include <string>
 
 #include "app.h"
+#include "version.h"
+
+#include <sys/stat.h>
 
 using namespace anki;
 
@@ -17,6 +20,16 @@ u32 __stacksize__ = 0x80000;
 }
 
 namespace {
+
+// Before the rename to Clamshell the app kept its files in sdmc:/3ds/anki3ds.
+// Move them over once, so an update keeps the collection, images and settings.
+void migrate_old_folder() {
+    struct stat st;
+    const char* old_dir = "sdmc:/3ds/anki3ds";
+    const char* new_dir = "sdmc:/3ds/" APP_ID;
+    if (stat(new_dir, &st) != 0 && stat(old_dir, &st) == 0) rename(old_dir, new_dir);
+}
+
 
 u32* g_soc_buffer = nullptr;
 bool g_soc_up = false;
@@ -42,7 +55,7 @@ void blit(const Canvas& c, gfxScreen_t screen) {
 
 class Platform3ds : public Platform {
 public:
-    std::string data_dir() override { return "sdmc:/3ds/anki3ds"; }
+    std::string data_dir() override { return "sdmc:/3ds/" APP_ID; }
     std::string fonts_dir() override { return "romfs:/fonts"; }
 
     bool keyboard(const std::string& hint, const std::string& initial, bool password, std::string& out) override {
@@ -133,7 +146,7 @@ public:
 }  // namespace
 
 #ifdef ANKI3DS_SELFTEST
-// Runs sdmc:/3ds/anki3ds/selftest.txt (same commands as host/sim.cpp) and
+// Runs sdmc:/3ds/clamshell/selftest.txt (same commands as host/sim.cpp) and
 // writes screenshots + selftest.log, then exits.
 int main() {
     osSetSpeedupEnable(true);
@@ -142,6 +155,7 @@ int main() {
     psInit();
     acInit();
     SelftestPlatform pf;
+    migrate_old_folder();
     std::string dir = pf.data_dir();
     App app(pf);
     app.init();
@@ -253,6 +267,7 @@ int main() {
     hidSetRepeatParameters(20, 6);
 
     Platform3ds pf;
+    migrate_old_folder();
     App app(pf);
     app.init();
 

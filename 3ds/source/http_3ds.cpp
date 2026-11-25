@@ -58,7 +58,7 @@ struct Tls {
         mbedtls_entropy_init(&entropy);
         mbedtls_ctr_drbg_init(&drbg);
         mbedtls_x509_crt_init(&ca);
-        const char* pers = "anki3ds";
+        const char* pers = APP_ID;
         if (mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy, (const unsigned char*)pers, strlen(pers))) {
             error = "random number generator failed to start";
             return false;
@@ -214,7 +214,7 @@ bool http_post(const std::string& url, const std::map<std::string, std::string>&
     }
 
     std::string req = "POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n" +
-                      "User-Agent: anki3ds/" ANKI3DS_VERSION "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
+                      "User-Agent: " APP_ID "/" ANKI3DS_VERSION "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
     for (auto& [k, v] : headers) req += k + ": " + v + "\r\n";
     req += "\r\n";
     if (conn.write_all(req.data(), req.size()) || conn.write_all(body.data(), body.size())) {
