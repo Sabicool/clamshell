@@ -7,6 +7,7 @@
 //  - It never sends decks, presets or note types (the 3DS can't edit them);
 //    if any are pending locally the sync stops rather than guess.
 #pragma once
+#include "version.h"
 #include <functional>
 #include <optional>
 #include <string>
@@ -30,7 +31,7 @@ public:
     explicit SyncClient(std::string endpoint = "https://sync.ankiweb.net/");
     std::string endpoint;
     std::string hkey;
-    std::string client_version = "anki3ds,0.1.0,3ds";
+    std::string client_version = "anki3ds," ANKI3DS_VERSION ",3ds";
     std::function<void(const std::string&)> on_progress;  // human-readable stage text
     std::function<void(size_t, size_t)> on_bytes;          // download progress
 

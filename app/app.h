@@ -61,6 +61,7 @@ struct Settings {
     bool auto_media = true;  // fetch a deck's images when you open it after a sync
     bool reveal_hidden = false;  // show sections templates hide behind JS buttons
     bool run_scripts = true;     // run card templates' JavaScript (QuickJS)
+    bool scratchpad = false;     // bottom screen is a stylus scratchpad while reviewing
     void load(const std::string& path);
     void save(const std::string& path) const;
 };
@@ -131,6 +132,17 @@ private:
     std::unique_ptr<Prefetch> prefetch_;
     bool prefetch_due_ = false;
     void prefetch_next();
+
+    // touch menu (bury, suspend, flag, mark, scratchpad) and the scratchpad itself
+    bool menu_open_ = false;
+    bool card_marked_ = false;
+    std::string card_note_;  // e.g. "Flagged blue", shown on the bottom screen
+    Canvas scratch_{320, 240};
+    int pen_x_ = -1, pen_y_ = -1;
+    void clear_scratch();
+    void on_menu(const Input& in);
+    void draw_menu();
+    void card_action(Scheduler::CardOp op, int flag = 0);
     bool answer_shown_ = false;
     int scroll_ = 0;
     int64_t shown_at_ms_ = 0;

@@ -21,8 +21,8 @@ namespace anki {
 
 enum CardType { CTYPE_NEW = 0, CTYPE_LEARN = 1, CTYPE_REVIEW = 2, CTYPE_RELEARN = 3 };
 enum CardQueue {
-    Q_USER_BURIED = -2,
-    Q_SCHED_BURIED = -3,
+    Q_SCHED_BURIED = -2,  // buried as a sibling when another card of the note was answered
+    Q_USER_BURIED = -3,   // buried by hand
     Q_SUSPENDED = -1,
     Q_NEW = 0,
     Q_LEARN = 1,
@@ -282,6 +282,12 @@ public:
     // Reverts the most recent answer (card, buried siblings, leech tag, review log).
     // Returns the card id that was undone.
     std::optional<int64_t> undo(std::string& err);
+
+    // Card actions from the review menu, matching Anki: burying skips suspended
+    // cards, suspending also takes buried ones, flags replace the card's flag,
+    // mark toggles the note's "marked" tag. Undoable like answers.
+    enum class CardOp { BuryCard, BuryNote, SuspendCard, SuspendNote, SetFlag, ToggleMark };
+    bool card_op(int64_t card_id, CardOp op, int flag, std::string& err);
     bool can_undo() const { return !undo_.empty(); }
 
     bool fsrs_enabled() const { return fsrs_; }

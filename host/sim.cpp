@@ -106,6 +106,20 @@ int main(int argc, char** argv) {
             in.touch_down = in.touching = true;
             app.frame(in);
             app.frame(idle);
+        } else if (cmd == "drag") {
+            // drag x1 y1 x2 y2 [frames]: a stylus stroke
+            int x1, y1, x2, y2, n = 20;
+            ss >> x1 >> y1 >> x2 >> y2;
+            if (!(ss >> n)) n = 20;
+            for (int i = 0; i <= n; i++) {
+                Input in;
+                in.touching = true;
+                in.touch_down = i == 0;
+                in.tx = x1 + (x2 - x1) * i / n;
+                in.ty = y1 + (y2 - y1) * i / n;
+                app.frame(in);
+            }
+            app.frame(idle);
         } else if (cmd == "type") {
             std::string rest;
             std::getline(ss, rest);

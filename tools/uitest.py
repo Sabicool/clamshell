@@ -46,6 +46,24 @@ key B
 shot 08-after-again
 key SELECT
 shot 08b-after-undo
+touch 280 19
+shot 08c-menu
+touch 160 121
+shot 08d-flagged-blue
+touch 280 19
+touch 230 166
+shot 08e-scratchpad
+drag 60 120 260 200
+drag 60 200 260 120
+key A
+shot 08f-scratchpad-answer
+touch 280 19
+touch 230 166
+touch 280 19
+touch 80 28
+shot 08g-after-bury
+key SELECT
+shot 08h-after-undo-bury
 key START
 shot 09-decks-after
 key X

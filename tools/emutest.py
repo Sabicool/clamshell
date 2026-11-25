@@ -49,6 +49,13 @@ shot 06-next-question
 key A
 key B
 shot 07-after-again
+touch 280 19
+shot 07b-menu
+touch 230 166
+drag 60 120 260 200
+shot 07c-scratchpad
+touch 280 19
+touch 230 166
 key A
 key A
 key A

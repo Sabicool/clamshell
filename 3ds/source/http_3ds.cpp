@@ -1,6 +1,7 @@
 // HTTP/1.1 POST over BSD sockets (libctru soc:u) with TLS from mbedTLS.
 // The console's own HTTP service has outdated TLS and root certificates, so we
 // bring our own (Mozilla CA bundle in romfs:/cacert.pem).
+#include "../../core/version.h"
 #include <3ds.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -213,7 +214,7 @@ bool http_post(const std::string& url, const std::map<std::string, std::string>&
     }
 
     std::string req = "POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n" +
-                      "User-Agent: anki3ds/0.1\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
+                      "User-Agent: anki3ds/" ANKI3DS_VERSION "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
     for (auto& [k, v] : headers) req += k + ": " + v + "\r\n";
     req += "\r\n";
     if (conn.write_all(req.data(), req.size()) || conn.write_all(body.data(), body.size())) {

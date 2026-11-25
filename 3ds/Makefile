@@ -16,7 +16,7 @@ TP := $(ROOT)/third_party
 BUILD := build
 TARGET := anki3ds
 APP_TITLE := Anki 3DS
-APP_DESC := Flashcards with AnkiWeb sync
+APP_DESC := Anki flashcards (0.2 alpha)
 APP_AUTHOR := anki-3ds
 
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft

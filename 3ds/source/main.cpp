@@ -196,6 +196,20 @@ int main() {
             show();
             app.frame(idle);
             show();
+        } else if (cmd == "drag") {
+            int x1, y1, x2, y2, n = 20;
+            if (sscanf(arg.c_str(), "%d %d %d %d %d", &x1, &y1, &x2, &y2, &n) < 4) continue;
+            for (int i = 0; i <= n; i++) {
+                Input in;
+                in.touching = true;
+                in.touch_down = i == 0;
+                in.tx = x1 + (x2 - x1) * i / n;
+                in.ty = y1 + (y2 - y1) * i / n;
+                app.frame(in);
+                show();
+            }
+            app.frame(idle);
+            show();
         } else if (cmd == "type") {
             pf.typed.push_back(arg);
         } else if (cmd == "select") {

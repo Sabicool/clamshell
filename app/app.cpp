@@ -1,4 +1,5 @@
 #include "app.h"
+#include "../core/version.h"
 
 #include <sys/stat.h>
 
@@ -40,12 +41,14 @@ void Settings::load(const std::string& path) {
     reveal_hidden = j.value("reveal_hidden", reveal_hidden);
     tz_auto = j.value("tz_auto", tz_auto);
     run_scripts = j.value("run_scripts", run_scripts);
+    scratchpad = j.value("scratchpad", scratchpad);
 }
 
 void Settings::save(const std::string& path) const {
     json j = {{"endpoint", endpoint}, {"hkey", hkey},       {"username", username},
               {"text_zoom", text_zoom}, {"night", night}, {"auto_media", auto_media},
-              {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}, {"run_scripts", run_scripts}};
+              {"reveal_hidden", reveal_hidden}, {"tz_auto", tz_auto}, {"run_scripts", run_scripts},
+              {"scratchpad", scratchpad}};
     if (minutes_west) j["minutes_west"] = *minutes_west;
     FILE* f = fopen(path.c_str(), "wb");
     if (!f) return;
@@ -557,6 +560,21 @@ void App::draw_decks() {
 
 // ---------------------------------------------------------------- review
 
+// Anki's flag colours, in flag order 1-7
+static const struct {
+    const char* name;
+    uint8_t r, g, b;
+} FLAGS[] = {{"red", 230, 60, 60},   {"orange", 245, 150, 40}, {"green", 60, 170, 80},  {"blue", 60, 120, 230},
+             {"pink", 240, 110, 190}, {"turquoise", 40, 190, 190}, {"purple", 150, 90, 210}};
+
+static bool note_marked(const std::optional<Note>& n) {
+    if (!n) return false;
+    std::string lower = " ";
+    for (char ch : n->tags) lower += (char)tolower((unsigned char)ch);
+    lower += " ";
+    return lower.find(" marked ") != std::string::npos;
+}
+
 // Self-test builds record how long each loading step takes, in timing.txt
 #ifdef ANKI3DS_SELFTEST
 #define STEP_TIME(label)                                                                           \
@@ -619,6 +637,10 @@ void App::next_card() {
             return;
         }
     }
+    clear_scratch();
+    card_note_.clear();
+    card_marked_ = note_marked(col_.get_note(card_->nid));
+    menu_open_ = false;
     states_ = sched_->scheduling_states(*card_);
     labels_ = sched_->describe_next_states(states_);
     STEP_TIME("  next states");
@@ -755,7 +777,7 @@ void App::undo() {
     auto c = col_.get_card(*cid);
     std::string kind = !c ? "review" : c->queue == Q_NEW ? "new" : c->queue == Q_REVIEW ? "review" : "learn";
     queue_->push_front({*cid, kind});
-    status_ = "Undid the last answer";
+    status_ = "Undid the last change";
     next_card();
 }
 
@@ -773,7 +795,136 @@ std::vector<Button> App::review_buttons() {
     return b;
 }
 
+void App::clear_scratch() {
+    scratch_.resize(320, 240, theme(settings_.night).bg);
+    pen_x_ = pen_y_ = -1;
+}
+
+static const Rect MORE_BTN{246, 4, 70, 30}, CLEAR_BTN{172, 4, 70, 30};
+
+void App::card_action(Scheduler::CardOp op, int flag) {
+    if (!card_ || !sched_) return;
+    using Op = Scheduler::CardOp;
+    std::string err;
+    int64_t cid = card_->id;
+    if (!sched_->card_op(cid, op, flag, err)) {
+        show_message("Couldn't change the card", err, Mode::Review);
+        return;
+    }
+    deck_undo_.push_back({});  // keeps the deck-counter undo stack in step with the scheduler's
+    if (deck_undo_.size() > 30) deck_undo_.erase(deck_undo_.begin());
+    menu_open_ = false;
+    dirty = true;
+    switch (op) {
+        case Op::BuryCard:
+        case Op::BuryNote:
+        case Op::SuspendCard:
+        case Op::SuspendNote:
+            status_ = op == Op::BuryCard ? "Buried the card"
+                    : op == Op::BuryNote ? "Buried the note"
+                    : op == Op::SuspendCard ? "Suspended the card" : "Suspended the note";
+            prefetch_.reset();
+            queue_->build();
+            next_card();
+            card_note_ = status_ + " (SELECT to undo)";
+            break;
+        case Op::SetFlag:
+            card_ = col_.get_card(cid);
+            card_note_ = flag ? std::string("Flagged ") + FLAGS[flag - 1].name : "Flag removed";
+            break;
+        case Op::ToggleMark:
+            card_marked_ = note_marked(col_.get_note(card_->nid));
+            card_note_ = card_marked_ ? "Marked" : "Unmarked";
+            break;
+    }
+}
+
+void App::on_menu(const Input& in) {
+    using Op = Scheduler::CardOp;
+    if (in.down & (K_B | K_START)) {
+        menu_open_ = false;
+        dirty = true;
+        return;
+    }
+    if (!in.touch_down) return;
+    int x = in.tx, y = in.ty;
+    if (hit({8, 8, 148, 40}, x, y)) card_action(Op::BuryCard);
+    else if (hit({164, 8, 148, 40}, x, y)) card_action(Op::BuryNote);
+    else if (hit({8, 54, 148, 40}, x, y)) card_action(Op::SuspendCard);
+    else if (hit({164, 54, 148, 40}, x, y)) card_action(Op::SuspendNote);
+    else if (y >= 104 && y < 140) {
+        int i = (x - 8) / 38;  // 0 = no flag, 1-7 flags
+        if (i >= 0 && i <= 7) card_action(Op::SetFlag, i);
+    } else if (hit({8, 146, 148, 40}, x, y)) card_action(Op::ToggleMark);
+    else if (hit({164, 146, 148, 40}, x, y)) {
+        settings_.scratchpad = !settings_.scratchpad;
+        settings_.save(settings_path_);
+        clear_scratch();
+        menu_open_ = false;
+        dirty = true;
+    } else if (hit({8, 194, 304, 40}, x, y)) {
+        menu_open_ = false;
+        dirty = true;
+    }
+}
+
+void App::draw_menu() {
+    const Theme& t = theme(settings_.night);
+    bottom.resize(320, 240, t.bg);
+    button(bottom, fonts_, {{8, 8, 148, 40}, "Bury card", "", "", t.hard}, settings_.night);
+    button(bottom, fonts_, {{164, 8, 148, 40}, "Bury note", "", "", t.hard}, settings_.night);
+    button(bottom, fonts_, {{8, 54, 148, 40}, "Suspend card", "", "", t.again}, settings_.night);
+    button(bottom, fonts_, {{164, 54, 148, 40}, "Suspend note", "", "", t.again}, settings_.night);
+    int current = card_ ? (card_->flags & 7) : 0;
+    for (int i = 0; i <= 7; i++) {
+        Rect r{8 + i * 38, 104, 34, 34};
+        if (i == current) bottom.fill_round_rect(r.x - 2, r.y - 2, r.w + 4, r.h + 4, 9, t.text);
+        if (i == 0) {
+            bottom.fill_round_rect(r.x, r.y, r.w, r.h, 7, t.panel);
+            text_centered(bottom, fonts_, r, "none", 11, t.dim);
+        } else {
+            bottom.fill_round_rect(r.x, r.y, r.w, r.h, 7, rgba(FLAGS[i - 1].r, FLAGS[i - 1].g, FLAGS[i - 1].b));
+        }
+    }
+    button(bottom, fonts_, {{8, 146, 148, 40}, card_marked_ ? "Unmark note" : "Mark note", "", ""}, settings_.night);
+    button(bottom, fonts_, {{164, 146, 148, 40}, settings_.scratchpad ? "Scratchpad off" : "Scratchpad on", "", ""},
+           settings_.night);
+    button(bottom, fonts_, {{8, 194, 304, 40}, "Close", "", "B", t.hard}, settings_.night);
+}
+
 void App::on_review(const Input& in) {
+    if (menu_open_) {
+        on_menu(in);
+        return;
+    }
+    if (in.touch_down && hit(MORE_BTN, in.tx, in.ty)) {
+        menu_open_ = true;
+        dirty = true;
+        return;
+    }
+    if (settings_.scratchpad) {
+        if (in.touch_down && hit(CLEAR_BTN, in.tx, in.ty)) {
+            clear_scratch();
+            dirty = true;
+            return;
+        }
+        if (in.touching && in.ty >= 40) {
+            uint32_t ink = settings_.night ? rgba(235, 235, 235) : rgba(30, 30, 30);
+            if (pen_x_ < 0 || in.touch_down) {
+                pen_x_ = in.tx;
+                pen_y_ = in.ty;
+            }
+            int dx = in.tx - pen_x_, dy = in.ty - pen_y_;
+            int steps = std::max(1, std::max(std::abs(dx), std::abs(dy)));
+            for (int i = 0; i <= steps; i++)
+                scratch_.fill_circle(pen_x_ + dx * i / steps, pen_y_ + dy * i / steps, 1, ink);
+            pen_x_ = in.tx;
+            pen_y_ = in.ty;
+            dirty = true;
+        } else if (!in.touching) {
+            pen_x_ = pen_y_ = -1;
+        }
+    }
     // scrolling
     int step = 0;
     if (in.held & K_DOWN) step += 6;
@@ -800,7 +951,8 @@ void App::on_review(const Input& in) {
         return;
     }
     Rect reveal_r{10, 112, 300, 34};
-    if (answer_shown_ && ((in.down & K_ZR) || (in.touch_down && hit(reveal_r, in.tx, in.ty)))) {
+    if (answer_shown_ &&
+        ((in.down & K_ZR) || (in.touch_down && !settings_.scratchpad && hit(reveal_r, in.tx, in.ty)))) {
         settings_.reveal_hidden = !settings_.reveal_hidden;
         settings_.save(settings_path_);
         int keep = scroll_;
@@ -822,7 +974,7 @@ void App::on_review(const Input& in) {
     }
     auto buttons = review_buttons();
     int touched = -1;
-    if (in.touch_down)
+    if (in.touch_down && !settings_.scratchpad)
         for (size_t i = 0; i < buttons.size(); i++)
             if (hit(buttons[i].r, in.tx, in.ty)) touched = (int)i;
     if (!answer_shown_) {
@@ -847,7 +999,12 @@ void App::draw_review() {
         int bar_y = (240 - bar_h) * scroll_ / std::max(1, max_scroll());
         top.fill_round_rect(395, bar_y, 4, bar_h, 2, rgba(0, 0, 0, 90));
     }
+    if (menu_open_) {
+        draw_menu();
+        return;
+    }
     bottom.resize(320, 240, t.bg);
+    if (settings_.scratchpad) std::copy(scratch_.data(), scratch_.data() + 320 * 240, bottom.data());
     if (queue_) {
         DeckCounts c = queue_->counts();
         std::string kind = queued_ ? queued_->kind : "";
@@ -861,17 +1018,45 @@ void App::draw_review() {
         float x = 12;
         x = chip(x, c.new_count, t.new_c, kind == "new");
         x = chip(x, c.learn_count, t.learn_c, kind == "learn" || kind == "daylearn");
-        chip(x, c.review_count, t.review_c, kind == "review");
-        const Deck* d = col_.deck(deck_id_);
-        if (d) {
-            std::string name = d->human_name();
-            size_t p = name.rfind("::");
-            std::string shortname = p == std::string::npos ? name : name.substr(p + 2);
-            text(bottom, fonts_, 308 - text_w(fonts_, fit(fonts_, shortname, 13, 170), 13), 14,
-                 fit(fonts_, shortname, 13, 170), 13, t.dim);
+        x = chip(x, c.review_count, t.review_c, kind == "review");
+        // flag and mark on the current card
+        if (card_ && (card_->flags & 7)) {
+            auto& f = FLAGS[(card_->flags & 7) - 1];
+            bottom.fill_circle((int)x + 4, 21, 6, rgba(f.r, f.g, f.b));
+            x += 18;
+        }
+        if (card_marked_) text(bottom, fonts_, x, 14, "★", 14, t.learn_c, FACE_SANS_BOLD);
+        if (!settings_.scratchpad) {
+            const Deck* d = col_.deck(deck_id_);
+            if (d) {
+                std::string name = d->human_name();
+                size_t p = name.rfind("::");
+                std::string shortname = fit(fonts_, p == std::string::npos ? name : name.substr(p + 2), 12, 95);
+                text(bottom, fonts_, 240 - text_w(fonts_, shortname, 12), 15, shortname, 12, t.dim);
+            }
         }
     }
-    text(bottom, fonts_, 12, 50, script_ ? "↑↓ scroll   L/R page   ◀▶ card keys" : "↑↓ / circle pad: scroll   L/R: page", 12, t.dim);
+    button(bottom, fonts_, {MORE_BTN, "More", "", ""}, settings_.night);
+    if (settings_.scratchpad) {
+        button(bottom, fonts_, {CLEAR_BTN, "Clear", "", ""}, settings_.night);
+        bottom.fill_rect(0, 39, 320, 1, t.border);
+        // the buttons still answer; remind which is which
+        std::string hint;
+        if (!answer_shown_) hint = "A: show answer";
+        else {
+            const char* keys[] = {"B", "Y", "A", "X"};
+            for (size_t i = 0; i < 4 && i < labels_.size(); i++)
+                hint += std::string(i ? "   " : "") + keys[i] + " " + labels_[i];
+        }
+        text(bottom, fonts_, 12, 222, hint, 12, t.dim);
+        if (!card_note_.empty()) text(bottom, fonts_, 12, 46, fit(fonts_, card_note_, 12, 296), 12, t.dim);
+        return;
+    }
+    if (!card_note_.empty())
+        text(bottom, fonts_, 12, 50, fit(fonts_, card_note_, 12, 296), 12, t.accent, FACE_SANS_BOLD);
+    else
+        text(bottom, fonts_, 12, 50, script_ ? "↑↓ scroll   L/R page   ◀▶ card keys" : "↑↓ / circle pad: scroll   L/R: page",
+             12, t.dim);
     text(bottom, fonts_, 12, 68, sched_ && sched_->can_undo() ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
     if (max_scroll() > 0 && scroll_ < max_scroll())
         text(bottom, fonts_, 12, 90, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
@@ -1001,7 +1186,7 @@ void App::draw_settings() {
             help = "Downloads the whole collection from the sync server again. Reviews on this 3DS that haven't "
                    "been synced will be lost.";
             break;
-        default: help = "Version 0.1.0 (first draft)."; break;
+        default: help = "Version " ANKI3DS_VERSION_LABEL ". Expect rough edges."; break;
     }
     paragraph(bottom, fonts_, 12, 12, 296, help, 14, t.text);
     text(bottom, fonts_, 12, 214, "A: select   ◀ ▶: change   B: back", 12, t.dim);

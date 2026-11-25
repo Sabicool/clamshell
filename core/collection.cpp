@@ -1325,8 +1325,8 @@ bool Scheduler::answer(int64_t card_id, Rating rating, uint32_t millis_taken, st
         bury_rev = bury_rev && gather_ord(original.queue) <= 2;
         if (bury_new || bury_rev || bury_il) {
             Stmt s(col_.db(),
-                   "update cards set queue = -3, mod = ?1, usn = -1 where id != ?2 and nid = ?3 and queue != -3 and "
-                   "queue != -1 and ((?4 and queue = 0) or (?5 and queue = 2) or (?6 and queue = 3))");
+                   "update cards set queue = -2, mod = ?1, usn = -1 where id != ?2 and nid = ?3 and "
+                   "((?4 and queue = 0) or (?5 and queue = 2) or (?6 and queue = 3))");
             s.bind(1, col_.now_secs()).bind(2, c.id).bind(3, c.nid).bind(4, (int64_t)bury_new)
                 .bind(5, (int64_t)bury_rev).bind(6, (int64_t)bury_il);
             s.step();
@@ -1380,8 +1380,100 @@ std::optional<int64_t> Scheduler::undo(std::string& err) {
     }
     col_.set_modified();
     col_.commit();
-    if (lb_) lb_->remove_card(u.card_id);
+    if (lb_ && u.revlog_id) lb_->remove_card(u.card_id);  // menu actions never touched the load balancer
     return u.card_id;
+}
+
+bool Scheduler::card_op(int64_t card_id, CardOp op, int flag, std::string& err) {
+    auto oc = col_.get_card(card_id);
+    if (!oc) {
+        err = "card not found";
+        return false;
+    }
+    UndoEntry undo;
+    undo.card_id = card_id;
+    {
+        std::string sql = std::string("select ") + CARD_COLS + " from cards where nid = ?";
+        Stmt s(col_.db(), sql.c_str());
+        s.bind(1, oc->nid);
+        while (s.step()) undo.siblings.push_back(card_from_row(s));
+    }
+    undo.note = col_.get_note(oc->nid);
+    int64_t now = col_.now_secs();
+    col_.begin();
+    switch (op) {
+        case CardOp::BuryCard:
+        case CardOp::BuryNote:
+        case CardOp::SuspendCard:
+        case CardOp::SuspendNote: {
+            bool bury = op == CardOp::BuryCard || op == CardOp::BuryNote;
+            bool whole_note = op == CardOp::BuryNote || op == CardOp::SuspendNote;
+            int target = bury ? Q_USER_BURIED : Q_SUSPENDED;
+            for (Card c : undo.siblings) {
+                if (!whole_note && c.id != card_id) continue;
+                if (c.queue == target) continue;
+                if (bury && c.queue == Q_SUSPENDED) continue;  // burying would unsuspend it
+                c.queue = target;
+                c.mtime = now;
+                c.usn = -1;
+                col_.update_card(c);
+            }
+            break;
+        }
+        case CardOp::SetFlag: {
+            Card c = *oc;
+            int nf = (c.flags & ~7) | (flag & 7);
+            if (nf != c.flags) {
+                c.flags = nf;
+                c.mtime = now;
+                c.usn = -1;
+                col_.update_card(c);
+            }
+            break;
+        }
+        case CardOp::ToggleMark: {
+            if (!undo.note) break;
+            Note n = *undo.note;
+            std::vector<std::string> tags;
+            bool had = false;
+            size_t i = 0;
+            while (i < n.tags.size()) {
+                while (i < n.tags.size() && n.tags[i] == ' ') i++;
+                size_t j = n.tags.find(' ', i);
+                if (j == std::string::npos) j = n.tags.size();
+                if (j > i) {
+                    std::string t = n.tags.substr(i, j - i), lower;
+                    for (char ch : t) lower += (char)tolower((unsigned char)ch);
+                    if (lower == "marked") had = true;
+                    else tags.push_back(t);
+                }
+                i = j;
+            }
+            if (!had) {
+                // Anki keeps the spelling already in the tag list (e.g. "Marked")
+                std::string name = "marked";
+                Stmt s(col_.db(), "select tag from tags where tag = 'marked' collate nocase");
+                if (s.step()) name = s.text(0);
+                tags.push_back(name);
+            }
+            std::string joined;
+            for (auto& t : tags) joined += " " + t;
+            n.tags = joined.empty() ? "" : joined + " ";
+            n.mtime = now;
+            n.usn = -1;
+            col_.update_note(n);
+            if (!had) {
+                Stmt s(col_.db(), "insert or ignore into tags (tag, usn, collapsed, config) values ('marked', -1, 0, null)");
+                s.step();
+            }
+            break;
+        }
+    }
+    col_.set_modified();
+    col_.commit();
+    undo_.push_back(std::move(undo));
+    if (undo_.size() > 30) undo_.erase(undo_.begin());
+    return true;
 }
 
 // ---------------------------------------------------------------- display

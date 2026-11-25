@@ -172,6 +172,31 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    if (cmd == "op" && argc >= 5) {
+        // op <collection> <card id> <bury|burynote|suspend|suspendnote|flag0..7|mark>
+        Scheduler sched(col);
+        std::string what = argv[4], err;
+        using Op = Scheduler::CardOp;
+        Op op = Op::BuryCard;
+        int flag = 0;
+        if (what == "bury") op = Op::BuryCard;
+        else if (what == "burynote") op = Op::BuryNote;
+        else if (what == "suspend") op = Op::SuspendCard;
+        else if (what == "suspendnote") op = Op::SuspendNote;
+        else if (what == "mark") op = Op::ToggleMark;
+        else if (what.rfind("flag", 0) == 0) {
+            op = Op::SetFlag;
+            flag = std::stoi(what.substr(4));
+        } else {
+            fprintf(stderr, "unknown op %s\n", what.c_str());
+            return 1;
+        }
+        if (!sched.card_op(std::stoll(argv[3]), op, flag, err)) {
+            fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        return 0;
+    }
     if (cmd == "replay") {
         Scheduler sched(col);
         sched.start_session(true);

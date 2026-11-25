@@ -2,7 +2,7 @@
 
 An unofficial Anki client for the New Nintendo 3DS (homebrew). It reviews your real Anki collection with the same FSRS scheduling as desktop Anki, renders cards' HTML and CSS (including tables, images, image occlusion masks and simple MathJax), runs card templates' JavaScript, and syncs with an Anki sync server.
 
-Status: first draft. Everything below "Verified" was tested on a Mac against the real Anki 26.08 engine, and the real 3DS build has run end to end in the Azahar emulator; nothing has run on 3DS hardware yet.
+Status: alpha (0.2.0). Everything below "Verified" was tested on a Mac against the real Anki 26.08 engine, and the real 3DS build has run end to end in the Azahar emulator; nothing has run on 3DS hardware yet.
 
 ## Verified on the Mac
 
@@ -13,8 +13,9 @@ Status: first draft. Everything below "Verified" was tested on a Mac against the
 - **Card scripts**: Malleus's template JavaScript runs under QuickJS; one-by-one cloze cards reveal line by line with ▶ and hide with ◀, as on desktop.
 - **The app's screens and flows** run in a desktop simulator (`tools/uitest.py`): sign in, download, deck list, study, answer, sync, settings. Screenshots go to `build/ui-shots/`.
 - **The 3DS network code** (`3ds/source/http_3ds.cpp`: sockets, mbedTLS, chunked downloads) was compiled for the Mac with a small shim and passed the same sync test, including the 76 MB collection download. Its TLS accepts valid certificates and rejects expired or wrong-host ones.
+- **Bury, suspend, flags and mark** (`tools/opstest.py`) give the same card and note rows as Anki, including burying a note with a suspended card and suspending a buried one. Sibling burying when answering matches Anki too.
 - The 3DS build (`make -C 3ds`) compiles and links with devkitARM r68.
-- **The real 3DS build runs in the Azahar emulator** (`tools/emutest.py`): it signs in to a local sync server, downloads a copy of a 17,000-card collection (76 MB), opens Malleus, renders and answers four cards, syncs, and the four reviews arrive on desktop. Screenshots come from the emulated framebuffer into `build/emu-shots/`. In the emulator, showing a card takes about 0.6 s, opening Malleus about 1 s (plus a one-off download of the images for that day's cards) and a sync about 4 s. Emulator timing is only a rough guide to hardware.
+- **The real 3DS build runs in the Azahar emulator** (`tools/emutest.py`): it signs in to a local sync server, downloads a copy of a 17,000-card collection (76 MB), opens Malleus, renders and answers four cards, syncs, and the four reviews arrive on desktop. Screenshots come from the emulated framebuffer into `build/emu-shots/`. In the emulator, the next card appears about 0.1 s after answering (it is laid out while you read the answer), opening Malleus takes about 1 s (plus a one-off download of the images for that day's cards) and a sync about 4 s. Emulator timing is only a rough guide to hardware.
 
 ## Important: AnkiWeb
 
@@ -44,6 +45,8 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 | Deck list | ↑↓ choose, ◀▶ collapse/expand, L/R page, **A** study, **X** sync, **Y** download images for the deck, **SELECT** settings, **START** quit |
 | Question | **A** show answer, ↑↓ / circle pad / C-stick scroll, L/R page, ◀ ▶ send arrow keys to the card (e.g. Malleus one-by-one reveal), **SELECT** undo last answer, **START** back to decks |
 | Answer | **B** Again, **Y** Hard, **A** Good, **X** Easy (or tap the buttons); **ZR** or tap *Show extra sections* to open sections a template hides behind buttons (e.g. Malleus resources) |
+| Question or answer | Tap **More** for bury card/note, suspend card/note, flag colours, mark note and the scratchpad; **SELECT** undoes these too |
+| Scratchpad | Draw on the bottom screen with the stylus, tap **Clear** to wipe it; it clears itself on each new card. **A**/**B**/**Y**/**X** still answer, and the intervals are shown along the bottom |
 | Settings | ↑↓ choose, ◀▶ change, **A** select, **B** back |
 
 ## How it works
@@ -58,10 +61,10 @@ Quicker look without a server: close desktop Anki, copy your `collection.anki2` 
 - `app/` is the UI, drawn in software into two canvases. `3ds/source/main.cpp` shows them on the screens; `host/sim.cpp` runs the same app on a Mac with scripted input.
 - `3ds/source/http_3ds.cpp` does HTTP/HTTPS with mbedTLS and a bundled CA list, because the console's own TLS is too old for modern servers.
 
-## Known limitations (first draft)
+## Known limitations (alpha)
 
 - **JavaScript runs, but there's no pointer.** Scripts run under QuickJS against a small DOM (elements, classes, styles, events, timers, sessionStorage), and ◀ ▶ reach a card's keyboard shortcuts. The card is on the top screen, which isn't touch-sensitive, so buttons inside cards can't be clicked and are hidden; *Show extra sections* opens the sections Malleus and AnKing hide behind buttons. Scripts can be turned off in Settings.
-- **No audio and no typed answers** yet; animated GIF/WebP images show their first frame. Undo keeps the last 30 answers of the current session.
+- **No audio and no typed answers** yet; animated GIF/WebP images show their first frame. Undo keeps the last 30 answers and card actions of the current session.
 - **Cards that have never had FSRS memory states computed** (rare; usually suspended cards from before FSRS was turned on) show an error when answered. Opening the deck options on desktop and saving recomputes them.
 - **Filtered decks** work for rescheduling decks; preview decks are untested.
 - MathJax support is an approximation (symbols, Greek, sub/superscripts, fractions, roots, `\ce{}`); complex layouts show as plain text.
