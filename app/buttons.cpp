@@ -16,8 +16,8 @@ static const char* FLAG_NAMES[] = {"red", "orange", "green", "blue", "pink", "tu
 
 const std::vector<std::string>& button_actions() {
     static const std::vector<std::string> list = [] {
-        std::vector<std::string> v = {"none",       "page_up", "page_down", "extra", "undo", "menu",
-                                      "scratchpad", "bury",    "suspend",   "mark"};
+        std::vector<std::string> v = {"none",       "page_up", "page_down", "extra",  "zoom", "undo",
+                                      "menu",       "scratchpad", "bury",   "suspend", "mark"};
         for (int i = 1; i <= 7; i++) v.push_back("flag:" + std::to_string(i));
         for (const char* k : {"ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "Enter", "Escape"})
             v.push_back(std::string("key:") + k);
@@ -47,6 +47,7 @@ std::string action_short_label(const std::string& a) {
     if (a == "page_up") return "page up";
     if (a == "page_down") return "page down";
     if (a == "extra") return "extra";
+    if (a == "zoom") return "zoom";
     if (a == "scratchpad") return "scratchpad";
     if (a.rfind("flag:", 0) == 0) return std::string("flag ") + FLAG_NAMES[(a[5] - '1') % 7];
     return a == "none" ? "" : a;
@@ -57,6 +58,7 @@ std::string action_label(const std::string& a) {
     if (a == "page_up") return "Page up";
     if (a == "page_down") return "Page down";
     if (a == "extra") return "Show/hide extra sections";
+    if (a == "zoom") return "Magnify";
     if (a == "undo") return "Undo";
     if (a == "menu") return "Open the More menu";
     if (a == "scratchpad") return "Scratchpad on/off";

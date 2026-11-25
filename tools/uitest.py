@@ -41,6 +41,13 @@ hold DOWN 30
 shot 06-answer-scrolled
 key ZL
 shot 06b-answer-after-zl
+touch 207 19
+shot 06c-zoom
+drag 200 200 120 80
+shot 06d-zoom-moved
+touch 78 17
+shot 06e-zoom-3x
+key B
 key A
 shot 07-next-question
 key A
@@ -65,7 +72,7 @@ touch 280 19
 touch 80 28
 shot 08g-after-bury
 touch 280 19
-touch 80 214
+touch 160 214
 shot 08g2-buttons-for-note-type
 key B
 key SELECT

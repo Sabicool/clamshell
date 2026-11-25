@@ -155,6 +155,18 @@ private:
     void draw_menu();
     void card_action(Scheduler::CardOp op, int flag = 0);
 
+    // magnifier: part of the card, redrawn at 2x or 3x on the bottom screen
+    bool zoom_open_ = false;
+    float zoom_scale_ = 2.0f;
+    float zoom_x_ = 0, zoom_y_ = 0;  // top-left of the magnified area, in card pixels
+    Canvas zoom_{320, 206};
+    bool zoom_dirty_ = true;
+    int zoom_pen_x_ = -1, zoom_pen_y_ = -1;
+    void open_zoom();
+    void clamp_zoom();
+    void on_zoom(const Input& in);
+    void draw_zoom();
+
     // button assignments (app/buttons.h)
     int64_t current_mid_ = 0;  // note type of the card on screen
     std::string current_nt_name_;

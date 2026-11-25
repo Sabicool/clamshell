@@ -706,6 +706,7 @@ void App::next_card() {
     }
     clear_scratch();
     card_note_.clear();
+    zoom_open_ = false;
     {
         auto note = col_.get_note(card_->nid);
         card_marked_ = note_marked(note);
@@ -760,6 +761,8 @@ CardViewOptions App::view_options() const {
 void App::render_current() {
     view_->render(current_html_, rendered_.css, rendered_.ord, view_options());
     dirty = true;
+    zoom_dirty_ = true;
+    if (zoom_open_) clamp_zoom();
 #ifdef ANKI3DS_SELFTEST
     if (FILE* f = fopen((pf_.data_dir() + "/timing.txt").c_str(), "ab")) {
         const Canvas& cv = view_->canvas();
@@ -883,7 +886,93 @@ void App::clear_scratch() {
     pen_x_ = pen_y_ = -1;
 }
 
-static const Rect MORE_BTN{246, 4, 70, 30}, CLEAR_BTN{172, 4, 70, 30};
+static const Rect MORE_BTN{246, 4, 70, 30}, CLEAR_BTN{172, 4, 70, 30}, ZOOM_BTN{172, 4, 70, 30};
+static const Rect ZOOM_OUT{8, 4, 44, 26}, ZOOM_IN{56, 4, 44, 26}, ZOOM_CLOSE{246, 4, 70, 26};
+static const int ZOOM_TOP = 34;  // the magnified view sits below the toolbar
+
+void App::open_zoom() {
+    if (!view_) return;
+    zoom_open_ = true;
+    menu_open_ = false;
+    float vw = 320 / zoom_scale_;
+    zoom_x_ = (400 - vw) / 2;
+    zoom_y_ = (float)scroll_;
+    clamp_zoom();
+    zoom_dirty_ = true;
+    dirty = true;
+}
+
+void App::clamp_zoom() {
+    float vw = 320 / zoom_scale_, vh = (240 - ZOOM_TOP) / zoom_scale_;
+    zoom_x_ = std::clamp(zoom_x_, 0.0f, std::max(0.0f, 400 - vw));
+    zoom_y_ = std::clamp(zoom_y_, 0.0f, std::max(0.0f, (float)view_->content_height() - vh));
+    // keep the magnified area on the top screen
+    int top = (int)zoom_y_, bottom = (int)(zoom_y_ + vh);
+    if (top < scroll_) scroll_ = top;
+    if (bottom > scroll_ + 240) scroll_ = std::min(bottom - 240, max_scroll());
+}
+
+void App::on_zoom(const Input& in) {
+    if (in.down & (K_B | K_START)) {
+        zoom_open_ = false;
+        dirty = true;
+        return;
+    }
+    float ox = zoom_x_, oy = zoom_y_, os = zoom_scale_;
+    if (in.touch_down && hit(ZOOM_CLOSE, in.tx, in.ty)) {
+        zoom_open_ = false;
+        dirty = true;
+        return;
+    }
+    // change scale around the centre of the view
+    auto rescale = [&](float ns) {
+        float cx = zoom_x_ + 160 / zoom_scale_, cy = zoom_y_ + (240 - ZOOM_TOP) / 2 / zoom_scale_;
+        zoom_scale_ = ns;
+        zoom_x_ = cx - 160 / ns;
+        zoom_y_ = cy - (240 - ZOOM_TOP) / 2 / ns;
+    };
+    if (in.touch_down && hit(ZOOM_OUT, in.tx, in.ty)) rescale(2.0f);
+    else if (in.touch_down && hit(ZOOM_IN, in.tx, in.ty)) rescale(3.0f);
+    else if (in.touching && in.ty >= ZOOM_TOP) {
+        // drag: the card follows the stylus
+        if (zoom_pen_x_ >= 0 && !in.touch_down) {
+            zoom_x_ -= (in.tx - zoom_pen_x_) / zoom_scale_;
+            zoom_y_ -= (in.ty - zoom_pen_y_) / zoom_scale_;
+        }
+        zoom_pen_x_ = in.tx;
+        zoom_pen_y_ = in.ty;
+    }
+    if (!in.touching) zoom_pen_x_ = zoom_pen_y_ = -1;
+    float step = 6 / zoom_scale_;
+    if (in.held & K_LEFT) zoom_x_ -= step;
+    if (in.held & K_RIGHT) zoom_x_ += step;
+    if (in.held & K_UP) zoom_y_ -= step;
+    if (in.held & K_DOWN) zoom_y_ += step;
+    zoom_y_ += in.scroll / zoom_scale_;
+    clamp_zoom();
+    if (zoom_x_ != ox || zoom_y_ != oy || zoom_scale_ != os) {
+        zoom_dirty_ = true;
+        dirty = true;
+    }
+}
+
+void App::draw_zoom() {
+    const Theme& t = theme(settings_.night);
+    bottom.resize(320, 240, t.bg);
+    if (zoom_dirty_) {
+        view_->draw_zoomed(zoom_, zoom_scale_, zoom_x_, zoom_y_);
+        zoom_dirty_ = false;
+    }
+    for (int y = 0; y < zoom_.height() && ZOOM_TOP + y < 240; y++)
+        std::copy(zoom_.data() + (size_t)y * 320, zoom_.data() + (size_t)y * 320 + 320,
+                  bottom.data() + (size_t)(ZOOM_TOP + y) * 320);
+    bottom.fill_rect(0, ZOOM_TOP - 1, 320, 1, t.border);
+    button(bottom, fonts_, {ZOOM_OUT, "2×", "", "", zoom_scale_ == 2.0f ? 0u : t.hard}, settings_.night);
+    button(bottom, fonts_, {ZOOM_IN, "3×", "", "", zoom_scale_ == 3.0f ? 0u : t.hard}, settings_.night);
+    text(bottom, fonts_, 108, 11, "drag to move", 12, t.dim);
+    button(bottom, fonts_, {ZOOM_CLOSE, "Close", "", ""}, settings_.night);
+}
+
 
 void App::card_action(Scheduler::CardOp op, int flag) {
     if (!card_ || !sched_) return;
@@ -946,6 +1035,8 @@ void App::run_action(const std::string& a) {
         int keep = scroll_;
         render_current();
         scroll_ = std::min(keep, max_scroll());
+    } else if (a == "zoom") {
+        open_zoom();
     } else if (a == "undo") {
         prefetch_.reset();
         undo();
@@ -1123,9 +1214,11 @@ void App::on_menu(const Input& in) {
         clear_scratch();
         menu_open_ = false;
         dirty = true;
-    } else if (hit({8, 194, 148, 40}, x, y)) {
+    } else if (hit({8, 194, 96, 40}, x, y)) {
+        open_zoom();
+    } else if (hit({112, 194, 96, 40}, x, y)) {
         open_buttons(current_mid_, Mode::Review);
-    } else if (hit({164, 194, 148, 40}, x, y)) {
+    } else if (hit({216, 194, 96, 40}, x, y)) {
         menu_open_ = false;
         dirty = true;
     }
@@ -1152,13 +1245,22 @@ void App::draw_menu() {
     button(bottom, fonts_, {{8, 146, 148, 40}, card_marked_ ? "Unmark note" : "Mark note", "", ""}, settings_.night);
     button(bottom, fonts_, {{164, 146, 148, 40}, settings_.scratchpad ? "Scratchpad off" : "Scratchpad on", "", ""},
            settings_.night);
-    button(bottom, fonts_, {{8, 194, 148, 40}, "Buttons…", "", ""}, settings_.night);
-    button(bottom, fonts_, {{164, 194, 148, 40}, "Close", "", "B", t.hard}, settings_.night);
+    button(bottom, fonts_, {{8, 194, 96, 40}, "Zoom", "", ""}, settings_.night);
+    button(bottom, fonts_, {{112, 194, 96, 40}, "Buttons…", "", ""}, settings_.night);
+    button(bottom, fonts_, {{216, 194, 96, 40}, "Close", "", "", t.hard}, settings_.night);
 }
 
 void App::on_review(const Input& in) {
+    if (zoom_open_) {
+        on_zoom(in);
+        return;
+    }
     if (menu_open_) {
         on_menu(in);
+        return;
+    }
+    if (in.touch_down && !settings_.scratchpad && hit(ZOOM_BTN, in.tx, in.ty)) {
+        open_zoom();
         return;
     }
     if (in.touch_down && hit(MORE_BTN, in.tx, in.ty)) {
@@ -1251,6 +1353,18 @@ void App::draw_review() {
         int bar_y = (240 - bar_h) * scroll_ / std::max(1, max_scroll());
         top.fill_round_rect(395, bar_y, 4, bar_h, 2, rgba(0, 0, 0, 90));
     }
+    if (zoom_open_) {
+        // outline the magnified area on the top screen
+        int bx = (int)zoom_x_, by = (int)zoom_y_ - scroll_;
+        int bw = (int)(320 / zoom_scale_), bh = (int)((240 - ZOOM_TOP) / zoom_scale_);
+        uint32_t c = t.accent;
+        top.fill_rect(bx, by, bw, 2, c);
+        top.fill_rect(bx, by + bh - 2, bw, 2, c);
+        top.fill_rect(bx, by, 2, bh, c);
+        top.fill_rect(bx + bw - 2, by, 2, bh, c);
+        draw_zoom();
+        return;
+    }
     if (menu_open_) {
         draw_menu();
         return;
@@ -1278,17 +1392,9 @@ void App::draw_review() {
             x += 18;
         }
         if (card_marked_) text(bottom, fonts_, x, 14, "★", 14, t.learn_c, FACE_SANS_BOLD);
-        if (!settings_.scratchpad) {
-            const Deck* d = col_.deck(deck_id_);
-            if (d) {
-                std::string name = d->human_name();
-                size_t p = name.rfind("::");
-                std::string shortname = fit(fonts_, p == std::string::npos ? name : name.substr(p + 2), 12, 95);
-                text(bottom, fonts_, 240 - text_w(fonts_, shortname, 12), 15, shortname, 12, t.dim);
-            }
-        }
     }
     button(bottom, fonts_, {MORE_BTN, "More", "", ""}, settings_.night);
+    if (!settings_.scratchpad) button(bottom, fonts_, {ZOOM_BTN, "Zoom", "", "", t.hard}, settings_.night);
     if (settings_.scratchpad) {
         button(bottom, fonts_, {CLEAR_BTN, "Clear", "", ""}, settings_.night);
         bottom.fill_rect(0, 39, 320, 1, t.border);

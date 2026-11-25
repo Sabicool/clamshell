@@ -248,6 +248,14 @@ public:
 
     explicit CardContainer(FontLib& f) : fonts(f) {}
 
+    // Drawing transform for the magnifier: output = (layout - z) * zs.
+    // At zs = 1 and z = 0 this is the normal render.
+    float zs = 1.0f, zx = 0.0f, zy = 0.0f;
+    int X(float v) const { return (int)std::floor((v - zx) * zs); }
+    int Y(float v) const { return (int)std::floor((v - zy) * zs); }
+    int L(float v) const { return (int)std::ceil(v * zs); }
+    Rect R(const position& p) const { return {X(p.x), Y(p.y), L(p.width), L(p.height)}; }
+
     std::shared_ptr<Image> image(const std::string& src) {
         auto it = images.find(src);
         if (it != images.end()) return it->second;
@@ -385,13 +393,14 @@ public:
         FontHandle* h = (FontHandle*)hf;
         uint32_t col = opt.night_mode && near_black(color) ? NIGHT_FG : to_argb(color);
         float y = pos.y + (pos.height - (std::ceil(h->m.ascent) + std::ceil(h->m.descent)));
-        float adv = fonts.draw(*c, h->face, h->px, pos.x, y, text, col);
+        float adv = fonts.draw(*c, h->face, h->px * zs, (float)X(pos.x), (float)Y(y), text, col);
+        int line = std::max(1, (int)zs);
         if (h->decoration & text_decoration_line_underline)
-            c->fill_rect((int)pos.x, (int)(y + h->m.ascent + 1), (int)std::ceil(adv), 1, col);
+            c->fill_rect(X(pos.x), Y(y + h->m.ascent + 1), (int)std::ceil(adv), line, col);
         if (h->decoration & text_decoration_line_line_through)
-            c->fill_rect((int)pos.x, (int)(y + h->m.ascent - h->m.x_height / 2), (int)std::ceil(adv), 1, col);
+            c->fill_rect(X(pos.x), Y(y + h->m.ascent - h->m.x_height / 2), (int)std::ceil(adv), line, col);
         if (h->decoration & text_decoration_line_overline)
-            c->fill_rect((int)pos.x, (int)y, (int)std::ceil(adv), 1, col);
+            c->fill_rect(X(pos.x), Y(y), (int)std::ceil(adv), line, col);
     }
     pixel_t pt_to_px(float pt) const override { return pt * 96.0f / 72.0f; }
     pixel_t get_default_font_size() const override { return 16; }
@@ -400,15 +409,15 @@ public:
     void draw_list_marker(uint_ptr hdc, const list_marker& m) override {
         Canvas* c = (Canvas*)hdc;
         uint32_t col = opt.night_mode && near_black(m.color) ? NIGHT_FG : to_argb(m.color);
-        int cx = (int)(m.pos.x + m.pos.width / 2), cy = (int)(m.pos.y + m.pos.height / 2);
-        int r = std::max(2, (int)(m.pos.width / 2));
+        int cx = X(m.pos.x + m.pos.width / 2), cy = Y(m.pos.y + m.pos.height / 2);
+        int r = std::max(2, L(m.pos.width / 2));
         switch (m.marker_type) {
             case list_style_type_circle:
                 c->fill_circle(cx, cy, r, col);
                 c->fill_circle(cx, cy, std::max(1, r - 1), opt.night_mode ? NIGHT_BG : 0xFFFFFFFF);
                 break;
             case list_style_type_square:
-                c->fill_rect((int)m.pos.x, (int)m.pos.y, (int)m.pos.width, (int)m.pos.height, col);
+                c->fill_rect(X(m.pos.x), Y(m.pos.y), L(m.pos.width), L(m.pos.height), col);
                 break;
             case list_style_type_decimal:
             case list_style_type_lower_alpha:
@@ -424,7 +433,8 @@ public:
                     FontHandle* h = (FontHandle*)m.font;
                     float w = fonts.text_width(h->face, h->px, label.c_str());
                     float y = m.pos.y + m.pos.height / 2 - h->m.ascent * 0.6f;
-                    fonts.draw(*c, h->face, h->px, m.pos.x + m.pos.width - w, y, label.c_str(), col);
+                    fonts.draw(*c, h->face, h->px * zs, (float)X(m.pos.x + m.pos.width - w), (float)Y(y), label.c_str(),
+                               col);
                 }
                 break;
             }
@@ -449,19 +459,18 @@ public:
         auto img = image(url);
         if (!img) return;
         const position& b = layer.origin_box.width > 0 ? layer.origin_box : layer.border_box;
-        c->push_clip({(int)layer.clip_box.x, (int)layer.clip_box.y, (int)std::ceil(layer.clip_box.width),
-                      (int)std::ceil(layer.clip_box.height)});
-        c->draw_image(*img, (int)b.x, (int)b.y, (int)std::lround(b.width), (int)std::lround(b.height));
+        c->push_clip(R(layer.clip_box));
+        c->draw_image(*img, X(b.x), Y(b.y), (int)std::lround(b.width * zs), (int)std::lround(b.height * zs));
         c->pop_clip();
     }
     void draw_solid_fill(uint_ptr hdc, const background_layer& layer, const web_color& color) override {
         Canvas* c = (Canvas*)hdc;
         const position& b = layer.border_box;
         position cl = layer.clip_box;
-        c->push_clip({(int)cl.x, (int)cl.y, (int)std::ceil(cl.width), (int)std::ceil(cl.height)});
-        int radius = (int)layer.border_radius.top_left_x;
+        c->push_clip(R(cl));
+        int radius = (int)(layer.border_radius.top_left_x * zs);
         uint32_t col = opt.night_mode && near_white(color) ? NIGHT_BG : to_argb(color);
-        c->fill_round_rect((int)b.x, (int)b.y, (int)std::ceil(b.width), (int)std::ceil(b.height), radius, col);
+        c->fill_round_rect(X(b.x), Y(b.y), L(b.width), L(b.height), radius, col);
         c->pop_clip();
     }
     void draw_gradient_fallback(uint_ptr hdc, const background_layer& layer, const background_layer::gradient_base& g) {
@@ -484,11 +493,11 @@ public:
             if (bd.width <= 0 || bd.style == border_style_none || bd.style == border_style_hidden) return;
             c->fill_rect(x, y, w, h, opt.night_mode && near_black(bd.color) ? NIGHT_FG : to_argb(bd.color));
         };
-        int x = (int)p.x, y = (int)p.y, w = (int)std::ceil(p.width), h = (int)std::ceil(p.height);
-        side(b.top, x, y, w, (int)std::ceil(b.top.width));
-        side(b.bottom, x, y + h - (int)std::ceil(b.bottom.width), w, (int)std::ceil(b.bottom.width));
-        side(b.left, x, y, (int)std::ceil(b.left.width), h);
-        side(b.right, x + w - (int)std::ceil(b.right.width), y, (int)std::ceil(b.right.width), h);
+        int x = X(p.x), y = Y(p.y), w = L(p.width), h = L(p.height);
+        side(b.top, x, y, w, L(b.top.width));
+        side(b.bottom, x, y + h - L(b.bottom.width), w, L(b.bottom.width));
+        side(b.left, x, y, L(b.left.width), h);
+        side(b.right, x + w - L(b.right.width), y, L(b.right.width), h);
     }
     void set_caption(const char*) override {}
     void set_base_url(const char*) override {}
@@ -504,7 +513,7 @@ public:
     }
     void import_css(string&, const string&, string&) override {}
     void set_clip(const position& pos, const border_radiuses&) override {
-        clip_stack_canvas->push_clip({(int)pos.x, (int)pos.y, (int)std::ceil(pos.width), (int)std::ceil(pos.height)});
+        clip_stack_canvas->push_clip(R(pos));
     }
     void del_clip() override { clip_stack_canvas->pop_clip(); }
     void get_viewport(position& vp) const override {
@@ -563,7 +572,8 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
                            "</style></head><body class=\"card card" + std::to_string(ord + 1) +
                            (opt.night_mode ? " nightMode night_mode\"" + std::string(NIGHT_INLINE) : std::string("\"")) + ">" + body +
                            "</body></html>";
-    auto doc = document::createFromString(doc_html, container_.get());
+    doc_ = document::createFromString(doc_html, container_.get());
+    auto& doc = doc_;
     doc->render((pixel_t)opt.width);
     int h = std::max((int)std::ceil(doc->height()), opt.viewport_height);
     h = std::min(h, opt.max_height);
@@ -575,6 +585,22 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
     doc->draw((uint_ptr)&canvas_, 0, 0, &clip);
     answer_y_ = -1;
     find_answer_anchor(doc->root(), answer_y_);
+}
+
+void CardView::draw_zoomed(Canvas& out, float scale, float src_x, float src_y) const {
+    if (!doc_) return;
+    CardContainer& c = *container_;
+    c.zs = scale;
+    c.zx = src_x;
+    c.zy = src_y;
+    out.resize(out.width(), out.height(), c.opt.night_mode ? NIGHT_BG : 0xFFFFFFFF);
+    Canvas* saved = c.clip_stack_canvas;
+    c.clip_stack_canvas = &out;
+    position clip(src_x, src_y, out.width() / scale, out.height() / scale);  // in layout pixels
+    doc_->draw((uint_ptr)&out, 0, 0, &clip);
+    c.clip_stack_canvas = saved;
+    c.zs = 1.0f;
+    c.zx = c.zy = 0.0f;
 }
 
 }  // namespace anki

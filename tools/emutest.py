@@ -44,6 +44,11 @@ key A
 shot 04-question
 key A
 shot 05-answer
+touch 207 19
+shot 05z-zoom
+drag 200 200 120 80
+shot 05z-zoom-moved
+key B
 key ZR
 shot 05b-extra
 key A

@@ -38,11 +38,16 @@ public:
     int content_height() const { return content_h_; }
     // y position (in canvas pixels) of the element with id="answer", or -1
     int answer_anchor() const { return answer_y_; }
+    // Redraws part of the laid-out card at `scale` into `out` (keeping out's
+    // size): the region starting at (src_x, src_y) in normal canvas pixels.
+    // Text is drawn at the larger size and images from their full resolution.
+    void draw_zoomed(Canvas& out, float scale, float src_x, float src_y) const;
 
 private:
     FontLib& fonts_;
     std::unique_ptr<CardContainer> container_;
     Canvas canvas_;
+    std::shared_ptr<litehtml::document> doc_;
     int content_h_ = 0;
     int answer_y_ = -1;
 };
