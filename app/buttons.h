@@ -3,6 +3,7 @@
 // shortcuts (Malleus: N for the next resource, AnKing: C for tags) can be used.
 // There's one set for all note types, and a note type can have its own.
 #pragma once
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
