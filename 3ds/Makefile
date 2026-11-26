@@ -65,7 +65,7 @@ selftest:
 
 # On Anki's own backend: make -C 3ds anki BRIDGE=/path/to/libclamshell_bridge.a
 anki:
-	$(MAKE) BUILD=build-anki TARGET=clamshell EXTRA_FLAGS=-DCLAMSHELL_ANKI BRIDGE=$(BRIDGE)
+	$(MAKE) BUILD=build-anki TARGET=clamshell-anki APP_TITLE="Clamshell (Anki backend)" EXTRA_FLAGS=-DCLAMSHELL_ANKI BRIDGE=$(BRIDGE)
 anki-selftest:
 	$(MAKE) BUILD=build-anki-selftest TARGET=clamshell-selftest EXTRA_FLAGS="-DCLAMSHELL_ANKI -DANKI3DS_SELFTEST" BRIDGE=$(BRIDGE)
 

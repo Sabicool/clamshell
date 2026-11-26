@@ -63,6 +63,10 @@ public:
         call("init", {{"ca_file", "romfs:/cacert.pem"}});
 #endif
     }
+    // closing checkpoints SQLite's write-ahead log into the collection file
+    ~AnkiEngine() override {
+        if (open_) call("close");
+    }
     const char* name() const override { return "Anki backend"; }
 
     bool open(const std::string& path, std::string& err) override {
