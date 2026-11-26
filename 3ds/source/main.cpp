@@ -14,6 +14,8 @@
 
 using namespace anki;
 
+extern "C" u32 __ctru_heap_size;
+
 // The default 32 KB main-thread stack is too small for HTML layout and SQLite.
 extern "C" {
 #ifdef CLAMSHELL_ANKI
@@ -250,7 +252,11 @@ int main() {
                 for (int x = 0; x < 320; x++) out.data()[(size_t)(y + 250) * 400 + x + 40] = bot.data()[(size_t)y * 320 + x];
             out.save_png(dir + "/shot-" + arg + ".png");
         }
-        logf(line + "  (" + std::to_string(osGetTime() - t0) + " ms)");
+        // heap in use, to watch for leaks and headroom
+        struct mallinfo mi = mallinfo();
+        logf(line + "  (" + std::to_string(osGetTime() - t0) + " ms, heap " +
+             std::to_string(mi.uordblks / (1024 * 1024)) + " of " + std::to_string(__ctru_heap_size / (1024 * 1024)) +
+             " MB used)");
     }
     if (sf) fclose(sf);
     logf("done");
