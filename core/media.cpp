@@ -108,6 +108,18 @@ std::vector<std::string> missing_media_for_cards(Collection& col, const std::vec
         media_dir);
 }
 
+std::vector<std::string> missing_files(const std::vector<std::string>& names, const std::string& media_dir) {
+    std::set<std::string> present;
+    if (DIR* d = opendir(media_dir.c_str())) {
+        while (dirent* e = readdir(d)) present.insert(e->d_name);
+        closedir(d);
+    }
+    std::vector<std::string> out;
+    for (auto& n : names)
+        if (!present.count(n)) out.push_back(n);
+    return out;
+}
+
 namespace {
 std::vector<std::string> missing_in_notes(Collection& col, const std::string& sql, const std::string& media_dir) {
     std::set<std::string> names;

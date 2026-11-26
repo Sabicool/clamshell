@@ -10,6 +10,7 @@
 
 #include "buttons.h"
 #include "collection.h"
+#include "engine.h"
 #include "queue.h"
 #include "render/card_view.h"
 #include "render/fonts.h"
@@ -93,7 +94,7 @@ private:
     Platform& pf_;
     FontLib fonts_;
     Settings settings_;
-    Collection col_;
+    std::unique_ptr<Engine> engine_;  // the collection: Anki's backend or the C++ port
     std::string col_path_, media_dir_, settings_path_;
     Mode mode_ = Mode::Setup;
     std::string message_title_, message_body_;
@@ -104,6 +105,7 @@ private:
     struct DeckRow {
         int64_t id;
         std::string name;
+        std::string full_name;
         int depth;
         bool has_children;
         bool collapsed;
@@ -112,15 +114,16 @@ private:
     std::vector<DeckRow> rows_;
     std::vector<int64_t> collapsed_local_;
     int sel_ = 0, list_scroll_ = 0;
+    int64_t preset_deck_ = -1;  // cached preset name for the selected deck
+    std::string preset_name_;
 
     // review
     int64_t deck_id_ = 0;
-    std::unique_ptr<StudyQueue> queue_;
-    std::unique_ptr<Scheduler> sched_;
     std::unique_ptr<CardView> view_;
-    std::optional<Card> card_;
-    std::optional<QueuedCard> queued_;
-    SchedulingStates states_;
+    std::optional<StudyCard> card_;  // the card on screen
+    DeckCounts counts_;              // today's remaining counts
+    int64_t next_id_ = 0;            // the card likely to come next, for preparing it
+    bool can_undo_ = false;
     std::vector<std::string> labels_;
     RenderedCard rendered_;
     std::unique_ptr<js::CardScript> script_;
@@ -132,6 +135,7 @@ private:
     // appears as soon as the answer is saved. Thrown away if a different card comes up.
     struct Prefetch {
         int64_t card_id = 0;
+        StudyCard card;
         RenderedCard rendered;
         std::unique_ptr<js::CardScript> script;
         std::string html;
@@ -153,7 +157,7 @@ private:
     void clear_scratch();
     void on_menu(const Input& in);
     void draw_menu();
-    void card_action(Scheduler::CardOp op, int flag = 0);
+    void card_action(CardAction op, int flag = 0);
 
     // magnifier: part of the card, redrawn at 2x or 3x on the bottom screen
     bool zoom_open_ = false;
@@ -218,7 +222,6 @@ private:
     void show_answer();
     void answer(Rating r);
     void undo();
-    std::vector<std::vector<std::pair<int64_t, std::string>>> deck_undo_;  // deck common blobs before each answer
     void show_message(const std::string& title, const std::string& body, Mode ret);
     std::vector<ui::Button> review_buttons();
     int max_scroll() const;

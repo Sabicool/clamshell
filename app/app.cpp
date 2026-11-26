@@ -101,9 +101,11 @@ void App::init() {
         // Nothing can be drawn without fonts; keep going so the platform can show a console error.
     }
     view_ = std::make_unique<CardView>(fonts_);
+    engine_ = make_anki_engine();  // Anki's own backend when built with it
+    if (!engine_) engine_ = make_cpp_engine();
     if (exists(col_path_)) open_collection();
     else mode_ = Mode::Setup;
-    startup_sync_due_ = col_.is_open() && mode_ == Mode::Decks && (settings_.auto_sync & 1);
+    startup_sync_due_ = engine_->is_open() && mode_ == Mode::Decks && (settings_.auto_sync & 1);
     dirty = true;
 }
 
@@ -123,13 +125,12 @@ int64_t App::utc_ms() {
 }
 
 void App::configure_clock() {
-    col_.clock.now_millis = [this] { return utc_ms(); };
-    col_.clock.local_minutes_west = [this] { return settings_.minutes_west.value_or(0); };
+    engine_->set_clock([this] { return utc_ms(); }, settings_.minutes_west.value_or(0));
 }
 
 void App::open_collection() {
     std::string err;
-    if (!col_.open(col_path_, err)) {
+    if (!engine_->open(col_path_, err)) {
         show_message("Couldn't open your collection", err + "\n\nYou can download it again from your sync server in Settings.",
                      Mode::Settings);
         return;
@@ -138,7 +139,7 @@ void App::open_collection() {
         // Use the host's time zone if it has one (desktop simulator), otherwise the
         // offset desktop Anki last recorded in the collection.
         auto sys = pf_.system_minutes_west();
-        int32_t west = sys ? *sys : (int32_t)col_.config_int("localOffset", settings_.minutes_west.value_or(0));
+        int32_t west = sys ? *sys : engine_->recorded_minutes_west().value_or(settings_.minutes_west.value_or(0));
         if (settings_.minutes_west != west) {
             settings_.minutes_west = west;
             settings_.save(settings_path_);
@@ -153,54 +154,27 @@ void App::open_collection() {
 
 void App::build_rows() {
     rows_.clear();
-    if (!col_.is_open()) return;
-    auto counts = all_deck_counts(col_);
-    std::vector<const Deck*> decks;
-    for (auto& [id, d] : col_.decks) decks.push_back(&d);
-    std::sort(decks.begin(), decks.end(), [](const Deck* a, const Deck* b) {
-        // case-insensitive, component-wise
-        std::string x = a->name, y = b->name;
-        for (auto& ch : x) ch = (char)tolower((unsigned char)ch);
-        for (auto& ch : y) ch = (char)tolower((unsigned char)ch);
-        return x < y;
-    });
-    std::set<std::string> collapsed_names;
-    for (const Deck* d : decks) {
-        // hide children of collapsed decks
+    if (!engine_->is_open()) return;
+    std::vector<std::string> collapsed_names;  // children of these are hidden
+    for (const DeckEntry& d : engine_->decks()) {
         bool hidden = false;
         for (auto& cn : collapsed_names)
-            if (d->name.size() > cn.size() && d->name.compare(0, cn.size(), cn) == 0 && d->name[cn.size()] == '\x1f')
+            if (d.full_name.size() > cn.size() + 2 && d.full_name.compare(0, cn.size(), cn) == 0 &&
+                d.full_name.compare(cn.size(), 2, "::") == 0)
                 hidden = true;
-        bool has_children = false;
-        for (const Deck* o : decks)
-            if (o->name.size() > d->name.size() && o->name.compare(0, d->name.size(), d->name) == 0 &&
-                o->name[d->name.size()] == '\x1f') {
-                has_children = true;
-                break;
-            }
-        bool collapsed = d->common.boolean(1);
-        if (std::find(collapsed_local_.begin(), collapsed_local_.end(), d->id) != collapsed_local_.end())
+        bool collapsed = d.collapsed;
+        if (std::find(collapsed_local_.begin(), collapsed_local_.end(), d.id) != collapsed_local_.end())
             collapsed = !collapsed;
-        if (collapsed && has_children) collapsed_names.insert(d->name);
+        if (collapsed && d.has_children && !hidden) collapsed_names.push_back(d.full_name);
         if (hidden) continue;
-        // Skip the empty "Default" deck like desktop does when other decks exist
-        if (d->id == 1 && decks.size() > 1) {
-            Stmt s(col_.db(), "select 1 from cards where did = 1 limit 1");
-            if (!s.step()) continue;
-        }
-        size_t p = d->name.rfind('\x1f');
-        DeckRow r{d->id, p == std::string::npos ? d->name : d->name.substr(p + 1),
-                  (int)std::count(d->name.begin(), d->name.end(), '\x1f'), has_children, collapsed && has_children,
-                  counts[d->id]};
-        rows_.push_back(r);
+        rows_.push_back({d.id, d.name, d.full_name, d.depth, d.has_children, collapsed && d.has_children, d.counts});
     }
     if (sel_ >= (int)rows_.size()) sel_ = std::max(0, (int)rows_.size() - 1);
 }
 
 bool App::debug_select(const std::string& needle) {
     for (size_t i = 0; i < rows_.size(); i++) {
-        const Deck* d = col_.deck(rows_[i].id);
-        if (d && d->human_name().find(needle) != std::string::npos) {
+        if (rows_[i].full_name.find(needle) != std::string::npos) {
             sel_ = (int)i;
             list_scroll_ = std::max(0, sel_ - 4);
             dirty = true;
@@ -231,7 +205,7 @@ bool App::frame(const Input& in) {
             break;
         case Mode::Review: on_review(in); break;
         case Mode::Done:
-            if ((in.down & K_SELECT) && sched_ && sched_->can_undo()) {
+            if ((in.down & K_SELECT) && can_undo_) {
                 undo();
                 break;
             }
@@ -330,11 +304,7 @@ void App::draw_setup() {
 }
 
 void App::confirm_download(bool requested) {
-    unsynced_reviews_ = 0;
-    if (col_.is_open()) {
-        Stmt s(col_.db(), "select count() from revlog where usn = -1");
-        if (s.step()) unsynced_reviews_ = (int)s.i64(0);
-    }
+    unsynced_reviews_ = engine_->is_open() ? engine_->unsynced_reviews() : 0;
     download_requested_ = requested;
     mode_ = Mode::ConfirmDownload;
     dirty = true;
@@ -360,18 +330,17 @@ void App::login_flow(bool custom_server) {
         show_message("No network", err, mode_ == Mode::Setup ? Mode::Setup : Mode::Settings);
         return;
     }
-    SyncClient client(endpoint);
-    auto key = client.login(user, pass, err);
-    if (!key) {
+    std::string key, final_endpoint;
+    if (!engine_->login(endpoint, user, pass, key, final_endpoint, err)) {
         pf_.net_down();
-        show_message("Sign-in failed", err, col_.is_open() ? Mode::Settings : Mode::Setup);
+        show_message("Sign-in failed", err, engine_->is_open() ? Mode::Settings : Mode::Setup);
         return;
     }
-    settings_.endpoint = client.endpoint;
-    settings_.hkey = *key;
+    settings_.endpoint = final_endpoint;
+    settings_.hkey = key;
     settings_.username = user;
     settings_.save(settings_path_);
-    if (!col_.is_open()) {
+    if (!engine_->is_open()) {
         pf_.net_down();
         full_download_flow();
     } else {
@@ -402,23 +371,22 @@ void App::sync_flow(bool automatic) {
         }
         return;
     }
-    SyncClient client(settings_.endpoint);
-    client.hkey = settings_.hkey;
-    client.on_progress = [this](const std::string& s) { progress("Syncing…", s); };
-    SyncResult r = client.normal_sync(col_, err);
+    SyncOutcome r = engine_->sync(settings_.endpoint, settings_.hkey,
+                                  [this](const std::string& s) { progress("Syncing…", s); });
     pf_.net_down();
     if (r.new_endpoint) {
         settings_.endpoint = *r.new_endpoint;
         settings_.save(settings_path_);
     }
-    switch (r.status) {
-        case SyncStatus::NoChanges:
-        case SyncStatus::Synced: {
+    switch (r.kind) {
+        case SyncOutcome::NoChanges:
+        case SyncOutcome::Synced: {
             if (settings_.tz_auto && !pf_.system_minutes_west()) {
-                int32_t west = (int32_t)col_.config_int("localOffset", settings_.minutes_west.value_or(0));
+                int32_t west = engine_->recorded_minutes_west().value_or(settings_.minutes_west.value_or(0));
                 if (west != settings_.minutes_west) {
                     settings_.minutes_west = west;
                     settings_.save(settings_path_);
+                    configure_clock();
                 }
             }
             char buf[64];
@@ -426,13 +394,13 @@ void App::sync_flow(bool automatic) {
             struct tm tmv;
             gmtime_r(&now, &tmv);
             strftime(buf, sizeof buf, "%H:%M", &tmv);
-            status_ = std::string(r.status == SyncStatus::Synced ? "Synced" : "Already up to date") + " at " + buf;
+            status_ = std::string(r.kind == SyncOutcome::Synced ? "Synced" : "Already up to date") + " at " + buf;
             if (!r.message.empty()) show_message("Message from the sync server", r.message, Mode::Decks);
             else mode_ = Mode::Decks;
             build_rows();
             break;
         }
-        case SyncStatus::FullSyncRequired:
+        case SyncOutcome::FullRequired:
             if (r.download_ok) {
                 confirm_download(false);
             } else {
@@ -442,11 +410,11 @@ void App::sync_flow(bool automatic) {
             break;
         default:
             if (automatic) {
-                status_ = "Couldn't sync: " + (err.empty() ? r.message : err);
+                status_ = "Couldn't sync: " + r.error;
                 mode_ = Mode::Decks;
                 build_rows();
             } else {
-                show_message("Sync failed", err.empty() ? r.message : err, Mode::Decks);
+                show_message("Sync failed", r.error, Mode::Decks);
             }
     }
     dirty = true;
@@ -460,14 +428,11 @@ void App::full_download_flow() {
     std::string err;
     progress("Downloading collection…", "Connecting");
     if (!pf_.net_up(err)) {
-        show_message("No network", err, col_.is_open() ? Mode::Decks : Mode::Setup);
+        show_message("No network", err, engine_->is_open() ? Mode::Decks : Mode::Setup);
         return;
     }
-    SyncClient client(settings_.endpoint);
-    client.hkey = settings_.hkey;
-    client.on_progress = [this](const std::string& s) { progress("Downloading collection…", s); };
     size_t last_mb = (size_t)-1;
-    client.on_bytes = [&](size_t done, size_t total) {
+    auto on_bytes = [&](size_t done, size_t total) {
         size_t mb = done / (1024 * 1024);
         if (mb != last_mb) {
             last_mb = mb;
@@ -477,10 +442,10 @@ void App::full_download_flow() {
             progress("Downloading collection…", buf);
         }
     };
-    SyncResult r = client.full_download(col_, col_path_, err);
+    bool ok = engine_->full_download(settings_.endpoint, settings_.hkey, col_path_, on_bytes, err);
     pf_.net_down();
-    if (r.status != SyncStatus::Downloaded) {
-        show_message("Download failed", err, col_.is_open() ? Mode::Decks : Mode::Setup);
+    if (!ok) {
+        show_message("Download failed", err, engine_->is_open() ? Mode::Decks : Mode::Setup);
         return;
     }
     open_collection();
@@ -490,7 +455,7 @@ void App::full_download_flow() {
 
 void App::media_flow(int64_t deck_id, bool quiet) {
     if (settings_.hkey.empty()) return;
-    auto names = missing_media_for_deck(col_, deck_id, media_dir_);
+    auto names = missing_files(engine_->deck_media_names(deck_id), media_dir_);
     if (names.empty()) {
         if (!quiet) show_message("Images", "All images for this deck are already on the SD card.", Mode::Decks);
         return;
@@ -607,16 +572,17 @@ void App::draw_decks() {
     bottom.resize(320, 240, t.bg);
     if (!rows_.empty()) {
         const DeckRow& r = rows_[sel_];
-        const Deck* d = col_.deck(r.id);
-        std::string full = d ? d->human_name() : r.name;
+        std::string full = r.full_name;
         float y = paragraph(bottom, fonts_, 12, 10, 296, full, 15, t.text, FACE_SANS_BOLD, 1.25f);
         std::string due = std::to_string(r.counts.new_count) + " new · " + std::to_string(r.counts.learn_count) +
                           " learning · " + std::to_string(r.counts.review_count) + " due";
         text(bottom, fonts_, 12, y + 2, due, 13, t.dim);
-        if (d && !d->filtered) {
-            const DeckConfig& cfg = col_.config_for_deck(*d);
-            text(bottom, fonts_, 12, y + 20, fit(fonts_, "Preset: " + cfg.name, 12, 296), 12, t.dim);
+        if (preset_deck_ != r.id) {
+            preset_deck_ = r.id;
+            preset_name_ = engine_->deck_preset(r.id);
         }
+        if (!preset_name_.empty())
+            text(bottom, fonts_, 12, y + 20, fit(fonts_, "Preset: " + preset_name_, 12, 296), 12, t.dim);
     }
     if (!status_.empty()) text(bottom, fonts_, 12, 128, fit(fonts_, status_, 12, 296), 12, t.dim);
     button(bottom, fonts_, {{10, 150, 145, 44}, "Study", "", "A"}, settings_.night);
@@ -633,14 +599,6 @@ static const struct {
     uint8_t r, g, b;
 } FLAGS[] = {{"red", 230, 60, 60},   {"orange", 245, 150, 40}, {"green", 60, 170, 80},  {"blue", 60, 120, 230},
              {"pink", 240, 110, 190}, {"turquoise", 40, 190, 190}, {"purple", 150, 90, 210}};
-
-static bool note_marked(const std::optional<Note>& n) {
-    if (!n) return false;
-    std::string lower = " ";
-    for (char ch : n->tags) lower += (char)tolower((unsigned char)ch);
-    lower += " ";
-    return lower.find(" marked ") != std::string::npos;
-}
 
 // Self-test builds record how long each loading step takes, in timing.txt
 #ifdef ANKI3DS_SELFTEST
@@ -666,57 +624,70 @@ void App::start_review(int64_t deck_id) {
 #endif
     deck_id_ = deck_id;
     progress("Loading…", "Building today's queue");
-    queue_ = std::make_unique<StudyQueue>(col_, deck_id);
-    queue_->build();
+    std::string err;
+    if (!engine_->start(deck_id, err)) {
+        show_message("Couldn't open the deck", err, Mode::Decks);
+        return;
+    }
     STEP_TIME("queue build");
     // fetch images for today's cards only (works the same for filtered decks);
     // Y on the deck list fetches a whole deck
     if (settings_.auto_media && !settings_.hkey.empty()) {
-        auto missing = missing_media_for_cards(col_, queue_->card_ids(), media_dir_);
+        auto missing = missing_files(engine_->media_names(engine_->todays_card_ids()), media_dir_);
         STEP_TIME("image check");
         if (!missing.empty()) fetch_media(missing, true);
         STEP_TIME("image download");
     }
-    sched_ = std::make_unique<Scheduler>(col_);
-    sched_->start_session(true);
-    STEP_TIME("scheduler start");
     reviewed_ = 0;
     next_card();
 }
 
 void App::next_card() {
-    card_.reset();
-    queued_ = queue_->next();
-    if (!queued_) {
+#ifdef ANKI3DS_SELFTEST
+    step_t_ = pf_.local_clock_ms();
+#endif
+    std::string err;
+    card_ = engine_->next(counts_, next_id_, err, prefetch_ ? prefetch_->card_id : 0);
+    if (card_ && card_->prepared && prefetch_ && prefetch_->card_id == card_->id) {
+        // details the engine left out because the app already rendered this card
+        const StudyCard& p = prefetch_->card;
+        card_->note_id = p.note_id;
+        card_->notetype_id = p.notetype_id;
+        card_->notetype = p.notetype;
+        card_->deck_id = p.deck_id;
+        card_->question = p.question;
+        card_->answer = p.answer;
+        card_->css = p.css;
+        card_->ord = p.ord;
+        card_->flags = p.flags;
+        card_->marked = p.marked;
+    } else if (card_ && card_->prepared) {
+        // shouldn't happen, but render it rather than show nothing
+        prefetch_.reset();
+        if (auto full = engine_->render(card_->id)) {
+            full->kind = card_->kind;
+            full->labels = card_->labels;
+            card_ = full;
+        }
+    }
+    can_undo_ = engine_->can_undo();
+    if (!card_) {
+        if (!err.empty()) {
+            show_message("Couldn't load the next card", err, Mode::Decks);
+            return;
+        }
         mode_ = Mode::Done;
         dirty = true;
         return;
     }
-#ifdef ANKI3DS_SELFTEST
-    step_t_ = pf_.local_clock_ms();
-#endif
-    card_ = col_.get_card(queued_->card_id);
-    if (!card_) {
-        queue_->build();
-        queued_ = queue_->next();
-        if (!queued_ || !(card_ = col_.get_card(queued_->card_id))) {
-            mode_ = Mode::Done;
-            return;
-        }
-    }
     clear_scratch();
     card_note_.clear();
     zoom_open_ = false;
-    {
-        auto note = col_.get_note(card_->nid);
-        card_marked_ = note_marked(note);
-        current_mid_ = note ? note->mid : 0;
-        auto nt = col_.notetypes.find(current_mid_);
-        current_nt_name_ = nt != col_.notetypes.end() ? nt->second.name : "";
-    }
+    card_marked_ = card_->marked;
+    current_mid_ = card_->notetype_id;
+    current_nt_name_ = card_->notetype;
     menu_open_ = false;
-    states_ = sched_->scheduling_states(*card_);
-    labels_ = sched_->describe_next_states(states_);
+    labels_ = card_->labels;
     STEP_TIME("  next states");
     answer_shown_ = false;
     prefetch_due_ = false;
@@ -730,7 +701,10 @@ void App::next_card() {
         STEP_TIME("  prefetched");
     } else {
         prefetch_.reset();
-        rendered_ = render_card(col_, *card_);
+        rendered_.question = card_->question;
+        rendered_.answer = card_->answer;
+        rendered_.css = card_->css;
+        rendered_.ord = card_->ord;
         STEP_TIME("  template");
         script_.reset();
         if (settings_.run_scripts) {
@@ -775,14 +749,16 @@ void App::render_current() {
 
 void App::prefetch_next() {
     prefetch_.reset();
-    if (!queue_) return;
-    auto q = queue_->peek(1);  // peek(0) is the card being answered
-    if (!q) return;
-    auto c = col_.get_card(q->card_id);
+    if (!next_id_) return;
+    auto c = engine_->render(next_id_);
     if (!c) return;
     auto p = std::make_unique<Prefetch>();
     p->card_id = c->id;
-    p->rendered = render_card(col_, *c);
+    p->card = *c;
+    p->rendered.question = c->question;
+    p->rendered.answer = c->answer;
+    p->rendered.css = c->css;
+    p->rendered.ord = c->ord;
     if (settings_.run_scripts) {
         p->script = std::make_unique<js::CardScript>();
         p->html = p->script->run(p->rendered.question, js_storage_);
@@ -813,56 +789,22 @@ void App::answer(Rating r) {
     step_t_ = pf_.local_clock_ms();
 #endif
     std::string err;
-    int original_queue = card_->queue;
-    int64_t did = card_->did;
-    // remember the deck counters so undo can put them back
-    std::vector<std::pair<int64_t, std::string>> saved;
-    {
-        std::vector<int64_t> ids{did};
-        for (int64_t p : col_.parent_deck_ids(did)) ids.push_back(p);
-        for (int64_t id : ids)
-            if (const Deck* d = col_.deck(id)) saved.push_back({id, d->common.encode()});
-    }
-    // the deck's studied-today counters go in the same transaction: one SD card commit per answer
-    auto studied = [&] {
-        record_studied(col_, did, original_queue == Q_NEW,
-                       original_queue == Q_REVIEW || original_queue == Q_DAY_LEARN, millis);
-    };
-    if (!sched_->answer(card_->id, r, millis, err, &states_, studied)) {
+    if (!engine_->answer((int)r, millis, err)) {
         show_message("Couldn't save the answer", err, Mode::Decks);
         return;
     }
     STEP_TIME("answer saved");
-    deck_undo_.push_back(saved);
-    if (deck_undo_.size() > 30) deck_undo_.erase(deck_undo_.begin());
-    if (auto updated = col_.get_card(card_->id)) queue_->on_answered(*updated);
     reviewed_++;
     next_card();
 }
 
 void App::undo() {
-    if (!sched_ || !sched_->can_undo()) return;
-    std::string err;
-    auto cid = sched_->undo(err);
-    if (!cid) return;
+    if (!engine_->can_undo()) return;
     bool was_answer = true;
-    if (!deck_undo_.empty()) {
-        was_answer = !deck_undo_.back().empty();  // card actions push an empty entry
-        for (auto& [id, blob] : deck_undo_.back()) {
-            auto it = col_.decks.find(id);
-            if (it == col_.decks.end()) continue;
-            it->second.common = pb::Message(blob);
-            Stmt s(col_.db(), "update decks set common = ? where id = ?");
-            s.bind_blob(1, blob).bind(2, id);
-            s.step();
-        }
-        deck_undo_.pop_back();
-    }
+    std::string err;
+    if (!engine_->undo(was_answer, err)) return;
     if (was_answer && reviewed_ > 0) reviewed_--;
-    queue_->build();
-    auto c = col_.get_card(*cid);
-    std::string kind = !c ? "review" : c->queue == Q_NEW ? "new" : c->queue == Q_REVIEW ? "review" : "learn";
-    queue_->push_front({*cid, kind});
+    prefetch_.reset();
     status_ = "Undid the last change";
     next_card();
 }
@@ -974,38 +916,34 @@ void App::draw_zoom() {
 }
 
 
-void App::card_action(Scheduler::CardOp op, int flag) {
-    if (!card_ || !sched_) return;
-    using Op = Scheduler::CardOp;
+void App::card_action(CardAction op, int flag) {
+    if (!card_) return;
     std::string err;
-    int64_t cid = card_->id;
-    if (!sched_->card_op(cid, op, flag, err)) {
+    if (!engine_->card_action(op, flag, *card_, err)) {
         show_message("Couldn't change the card", err, Mode::Review);
         return;
     }
-    deck_undo_.push_back({});  // keeps the deck-counter undo stack in step with the scheduler's
-    if (deck_undo_.size() > 30) deck_undo_.erase(deck_undo_.begin());
+    can_undo_ = true;
     menu_open_ = false;
     dirty = true;
     switch (op) {
-        case Op::BuryCard:
-        case Op::BuryNote:
-        case Op::SuspendCard:
-        case Op::SuspendNote:
-            status_ = op == Op::BuryCard ? "Buried the card"
-                    : op == Op::BuryNote ? "Buried the note"
-                    : op == Op::SuspendCard ? "Suspended the card" : "Suspended the note";
+        case CardAction::BuryCard:
+        case CardAction::BuryNote:
+        case CardAction::SuspendCard:
+        case CardAction::SuspendNote:
+            status_ = op == CardAction::BuryCard      ? "Buried the card"
+                      : op == CardAction::BuryNote    ? "Buried the note"
+                      : op == CardAction::SuspendCard ? "Suspended the card"
+                                                      : "Suspended the note";
             prefetch_.reset();
-            queue_->build();
             next_card();
             card_note_ = status_ + " (SELECT to undo)";
             break;
-        case Op::SetFlag:
-            card_ = col_.get_card(cid);
+        case CardAction::SetFlag:
             card_note_ = flag ? std::string("Flagged ") + FLAGS[flag - 1].name : "Flag removed";
             break;
-        case Op::ToggleMark:
-            card_marked_ = note_marked(col_.get_note(card_->nid));
+        case CardAction::ToggleMark:
+            card_marked_ = card_->marked;
             card_note_ = card_marked_ ? "Marked" : "Unmarked";
             break;
     }
@@ -1024,7 +962,7 @@ std::string App::action_for(const std::string& button) const {
 }
 
 void App::run_action(const std::string& a) {
-    using Op = Scheduler::CardOp;
+    using Op = CardAction;
     if (a == "page_up" || a == "page_down") {
         scroll_ = std::clamp(scroll_ + (a == "page_up" ? -200 : 200), 0, max_scroll());
         dirty = true;
@@ -1192,7 +1130,7 @@ void App::draw_buttons() {
 }
 
 void App::on_menu(const Input& in) {
-    using Op = Scheduler::CardOp;
+    using Op = CardAction;
     if (in.down & (K_B | K_START)) {
         menu_open_ = false;
         dirty = true;
@@ -1371,9 +1309,9 @@ void App::draw_review() {
     }
     bottom.resize(320, 240, t.bg);
     if (settings_.scratchpad) std::copy(scratch_.data(), scratch_.data() + 320 * 240, bottom.data());
-    if (queue_) {
-        DeckCounts c = queue_->counts();
-        std::string kind = queued_ ? queued_->kind : "";
+    {
+        DeckCounts c = counts_;
+        std::string kind = card_ ? card_->kind : "";
         auto chip = [&](float x, uint32_t v, uint32_t col, bool current) {
             std::string s = std::to_string(v);
             float w = text_w(fonts_, s, 16, FACE_SANS_BOLD);
@@ -1414,7 +1352,7 @@ void App::draw_review() {
         text(bottom, fonts_, 12, 50, fit(fonts_, card_note_, 12, 296), 12, t.accent, FACE_SANS_BOLD);
     else
         text(bottom, fonts_, 12, 50, fit(fonts_, button_hints(), 12, 296), 12, t.dim);
-    text(bottom, fonts_, 12, 68, sched_ && sched_->can_undo() ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
+    text(bottom, fonts_, 12, 68, can_undo_ ? "START: decks   SELECT: undo" : "START: back to decks", 12, t.dim);
     if (max_scroll() > 0 && scroll_ < max_scroll())
         text(bottom, fonts_, 12, 90, "More below ↓", 13, t.accent, FACE_SANS_BOLD);
     if (answer_shown_)
@@ -1450,7 +1388,7 @@ void App::on_settings(const Input& in) {
     bool activate = (in.down & K_A) != 0;
     if (in.down & (K_B | K_SELECT | K_START)) {
         settings_.save(settings_path_);
-        if (col_.is_open()) {
+        if (engine_->is_open()) {
             build_rows();
             mode_ = Mode::Decks;
         } else {
