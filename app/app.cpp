@@ -321,6 +321,12 @@ void App::login_flow(bool custom_server) {
     } else {
         endpoint = "https://sync.ankiweb.net/";
     }
+    if (!server_allowed(endpoint)) {
+        show_message("AnkiWeb isn't available",
+                     "AnkiWeb's terms only allow Anki's own apps. Use your own sync server's address instead.",
+                     engine_->is_open() ? Mode::Settings : Mode::Setup);
+        return;
+    }
     std::string user, pass;
     if (!pf_.keyboard(custom_server ? "Username" : "AnkiWeb email", settings_.username, false, user)) return;
     if (!pf_.keyboard("Password", "", true, pass)) return;
@@ -351,11 +357,39 @@ void App::login_flow(bool custom_server) {
 
 // ---------------------------------------------------------------- sync
 
+bool App::server_allowed(const std::string& endpoint) const {
+#ifdef ANKI3DS_ANKIWEB
+    (void)endpoint;
+    return true;
+#else
+    std::string host = endpoint;
+    size_t p = host.find("://");
+    if (p != std::string::npos) host = host.substr(p + 3);
+    host = host.substr(0, host.find_first_of("/:"));
+    for (auto& ch : host) ch = (char)tolower((unsigned char)ch);
+    return !(host == "ankiweb.net" || (host.size() > 12 && host.compare(host.size() - 12, 12, ".ankiweb.net") == 0));
+#endif
+}
+
+static const char* ANKIWEB_BLOCKED =
+    "This 3DS is signed in to AnkiWeb, but AnkiWeb's terms only allow Anki's own apps, so Clamshell won't sync "
+    "with it. Sign in to your own sync server in Settings > Sign in again.";
+
 // automatic: started by the "Sync automatically" setting. Problems go in the
 // deck list's status line rather than a message, except a full download, which always asks.
 void App::sync_flow(bool automatic) {
     if (settings_.hkey.empty()) {
         if (!automatic) show_message("Not signed in", "Sign in to your sync server from Settings first.", Mode::Decks);
+        return;
+    }
+    if (!server_allowed(settings_.endpoint)) {
+        if (automatic) {
+            status_ = "Not syncing: AnkiWeb isn't allowed. Sign in to your own server in Settings.";
+            mode_ = Mode::Decks;
+            dirty = true;
+        } else {
+            show_message("AnkiWeb isn't available", ANKIWEB_BLOCKED, Mode::Decks);
+        }
         return;
     }
     std::string err;
@@ -425,6 +459,10 @@ void App::sync_after_studying() {
 }
 
 void App::full_download_flow() {
+    if (!server_allowed(settings_.endpoint)) {
+        show_message("AnkiWeb isn't available", ANKIWEB_BLOCKED, engine_->is_open() ? Mode::Decks : Mode::Setup);
+        return;
+    }
     std::string err;
     progress("Downloading collection…", "Connecting");
     if (!pf_.net_up(err)) {
@@ -465,6 +503,10 @@ void App::media_flow(int64_t deck_id, bool quiet) {
 
 // quiet: fetching before a study session; never interrupt it with a message
 void App::fetch_media(const std::vector<std::string>& names, bool quiet) {
+    if (!server_allowed(settings_.endpoint)) {
+        if (!quiet) show_message("AnkiWeb isn't available", ANKIWEB_BLOCKED, Mode::Decks);
+        return;
+    }
     std::string err;
     progress("Downloading images…", std::to_string(names.size()) + " files");
     if (!pf_.net_up(err)) {

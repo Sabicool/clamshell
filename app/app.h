@@ -212,6 +212,8 @@ private:
 
     void login_flow(bool custom_server);
     void sync_flow(bool automatic = false);
+    // False for AnkiWeb unless built with ANKI3DS_ANKIWEB (its terms only allow Anki's own apps)
+    bool server_allowed(const std::string& endpoint) const;
     bool startup_sync_due_ = false;
     void sync_after_studying();
     void full_download_flow();
