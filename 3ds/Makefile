@@ -45,13 +45,29 @@ MBED_SRC := $(filter-out %/net_sockets.c %/timing.c,$(wildcard $(TP)/mbedtls/lib
 
 obj = $(patsubst %,$(BUILD)/%.o,$(subst ../,,$(1)))
 OBJS := $(call obj,$(APP_SRC)) $(call obj,$(CORE_SRC)) $(call obj,$(LH_SRC)) $(call obj,$(GUMBO_SRC)) \
-	$(call obj,$(QJS_SRC)) $(call obj,$(WEBP_SRC)) $(call obj,$(ZSTD_SRC)) $(call obj,$(MBED_SRC)) $(BUILD)/third_party/sqlite/sqlite3.c.o
+	$(call obj,$(QJS_SRC)) $(call obj,$(WEBP_SRC))
+ifeq ($(BRIDGE),)
+OBJS += $(call obj,$(ZSTD_SRC)) $(call obj,$(MBED_SRC)) $(BUILD)/third_party/sqlite/sqlite3.c.o
+else
+# On Anki's backend (BRIDGE = libclamshell_bridge.a from the Anki fork):
+# SQLite, zstd, curl and mbedTLS come from the bridge, and the C library's time
+# functions are wrapped so the 3DS's local-time clock reads as UTC.
+# The bridge carries pthread-3ds, the thread layer Rust's std expects on the 3DS;
+# where libctru defines the same pthread functions, the bridge's are used.
+LIBS := $(BRIDGE) -Wl,--wrap=time -Wl,--wrap=clock_gettime -Wl,--allow-multiple-definition $(LIBS)
+endif
 
 all: $(TARGET).3dsx
 
 # Self-test build for emulator runs: make -C 3ds selftest
 selftest:
 	$(MAKE) BUILD=build-selftest TARGET=clamshell-selftest EXTRA_FLAGS=-DANKI3DS_SELFTEST
+
+# On Anki's own backend: make -C 3ds anki BRIDGE=/path/to/libclamshell_bridge.a
+anki:
+	$(MAKE) BUILD=build-anki TARGET=clamshell EXTRA_FLAGS=-DCLAMSHELL_ANKI BRIDGE=$(BRIDGE)
+anki-selftest:
+	$(MAKE) BUILD=build-anki-selftest TARGET=clamshell-selftest EXTRA_FLAGS="-DCLAMSHELL_ANKI -DANKI3DS_SELFTEST" BRIDGE=$(BRIDGE)
 
 $(BUILD)/source/%.cpp.o: source/%.cpp
 	@mkdir -p $(dir $@)
@@ -86,7 +102,7 @@ $(BUILD)/third_party/%.c.o: $(TP)/%.c
 	@echo $<
 	@$(CC) $(CFLAGS) -w -c $< -o $@
 
-$(TARGET).elf: $(OBJS)
+$(TARGET).elf: $(OBJS) $(BRIDGE)
 	@echo linking $@
 	@$(CXX) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 
@@ -100,6 +116,6 @@ $(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh $(shell find romfs -type f)
 -include $(OBJS:.o=.d)
 
 clean:
-	rm -rf build build-selftest *.elf *.3dsx *.smdh
+	rm -rf build build-selftest build-anki build-anki-selftest *.elf *.3dsx *.smdh
 
-.PHONY: all clean selftest
+.PHONY: all clean selftest anki anki-selftest

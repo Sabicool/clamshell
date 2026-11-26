@@ -16,7 +16,12 @@ using namespace anki;
 
 // The default 32 KB main-thread stack is too small for HTML layout and SQLite.
 extern "C" {
+#ifdef CLAMSHELL_ANKI
+// Anki's backend (Rust) runs on this thread and needs a deep stack, e.g. during sync.
+u32 __stacksize__ = 0x400000;
+#else
 u32 __stacksize__ = 0x80000;
+#endif
 }
 
 namespace {

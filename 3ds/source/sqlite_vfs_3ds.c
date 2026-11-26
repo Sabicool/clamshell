@@ -1,3 +1,4 @@
+#ifndef CLAMSHELL_ANKI  // the backend build uses its own SQLite and storage layer
 // Minimal SQLite VFS for the 3DS SD card, built on newlib's POSIX file calls
 // (which libctru routes to sdmc:). No locking: only this app touches the file.
 #include <errno.h>
@@ -175,3 +176,5 @@ static sqlite3_vfs sd_vfs = {
 
 int sqlite3_os_init(void) { return sqlite3_vfs_register(&sd_vfs, 1); }
 int sqlite3_os_end(void) { return SQLITE_OK; }
+
+#endif

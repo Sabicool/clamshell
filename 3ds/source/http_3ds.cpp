@@ -1,3 +1,4 @@
+#ifndef CLAMSHELL_ANKI  // the backend build uses http_bridge.cpp
 // HTTP/1.1 POST over BSD sockets (libctru soc:u) with TLS from mbedTLS.
 // The console's own HTTP service has outdated TLS and root certificates, so we
 // bring our own (Mozilla CA bundle in romfs:/cacert.pem).
@@ -318,3 +319,5 @@ bool http_post(const std::string& url, const std::map<std::string, std::string>&
 }
 
 }  // namespace anki
+
+#endif
