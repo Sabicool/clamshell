@@ -41,7 +41,8 @@ static bool read_file(const std::string& path, std::vector<uint8_t>& out) {
 bool FontLib::load(const std::string& dir, std::string& err) {
     static const char* files[FACE_COUNT] = {
         "DejaVuSansCondensed.ttf",        "DejaVuSansCondensed-Bold.ttf", "DejaVuSansCondensed-Oblique.ttf",
-        "DejaVuSansCondensed-BoldOblique.ttf", "DejaVuSansMono.ttf",   "DejaVuSerifCondensed.ttf"};
+        "DejaVuSansCondensed-BoldOblique.ttf", "DejaVuSansMono.ttf",   "DejaVuSerifCondensed.ttf",
+        "Roboto-Regular.ttf", "Roboto-Bold.ttf", "Roboto-Italic.ttf", "Roboto-BoldItalic.ttf"};
     faces_.clear();
     faces_.resize(FACE_COUNT);
     for (int i = 0; i < FACE_COUNT; i++) {
@@ -61,8 +62,13 @@ bool FontLib::load(const std::string& dir, std::string& err) {
 }
 
 FaceId FontLib::resolve(FaceId face, uint32_t cp) {
+    if (face >= FACE_CARD && !faces_[face]) face = (FaceId)(face - FACE_CARD);  // no Roboto: DejaVu
     if (!faces_[face]) face = FACE_SANS;
     if (stbtt_FindGlyphIndex(&faces_[face]->info, (int)cp)) return face;
+    if (face >= FACE_CARD) {
+        FaceId same_style = (FaceId)(face - FACE_CARD);
+        if (faces_[same_style] && stbtt_FindGlyphIndex(&faces_[same_style]->info, (int)cp)) return same_style;
+    }
     for (int i = 0; i < FACE_COUNT; i++)
         if (faces_[i] && stbtt_FindGlyphIndex(&faces_[i]->info, (int)cp)) return (FaceId)i;
     return face;
@@ -71,6 +77,7 @@ FaceId FontLib::resolve(FaceId face, uint32_t cp) {
 FontMetricsPx FontLib::metrics(FaceId face, float px) {
     FontMetricsPx m;
     if (!loaded()) return m;
+    if (face >= FACE_CARD && !faces_[face]) face = (FaceId)(face - FACE_CARD);
     if (!faces_[face]) face = FACE_SANS;
     const stbtt_fontinfo& info = faces_[face]->info;
     float scale = stbtt_ScaleForMappingEmToPixels(&info, px);

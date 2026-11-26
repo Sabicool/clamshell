@@ -11,7 +11,12 @@
 
 namespace anki {
 
-enum FaceId { FACE_SANS = 0, FACE_SANS_BOLD, FACE_SANS_ITALIC, FACE_SANS_BOLD_ITALIC, FACE_MONO, FACE_SERIF, FACE_COUNT };
+// FACE_CARD*: Roboto, Android's font, for card text so cards look as they do in
+// AnkiDroid; the DejaVu faces fill in characters Roboto lacks and draw the interface.
+enum FaceId {
+    FACE_SANS = 0, FACE_SANS_BOLD, FACE_SANS_ITALIC, FACE_SANS_BOLD_ITALIC, FACE_MONO, FACE_SERIF,
+    FACE_CARD, FACE_CARD_BOLD, FACE_CARD_ITALIC, FACE_CARD_BOLD_ITALIC, FACE_COUNT
+};
 
 struct FontMetricsPx {
     float ascent = 0, descent = 0, line_gap = 0, x_height = 0, zero_width = 0, space_width = 0;

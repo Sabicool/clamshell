@@ -357,13 +357,14 @@ public:
         for (auto& ch : fam) ch = (char)tolower((unsigned char)ch);
         bool bold = d.weight >= 600;
         bool italic = d.style == font_style_italic;
-        FaceId face = FACE_SANS;
+        // Card text uses Roboto (as on AnkiDroid); DejaVu fills in missing characters.
+        FaceId face = FACE_CARD;
         if (fam.find("mono") != std::string::npos || fam.find("courier") != std::string::npos ||
             fam.find("consol") != std::string::npos)
             face = FACE_MONO;
-        else if (bold && italic) face = FACE_SANS_BOLD_ITALIC;
-        else if (bold) face = FACE_SANS_BOLD;
-        else if (italic) face = FACE_SANS_ITALIC;
+        else if (bold && italic) face = FACE_CARD_BOLD_ITALIC;
+        else if (bold) face = FACE_CARD_BOLD;
+        else if (italic) face = FACE_CARD_ITALIC;
         auto h = std::make_unique<FontHandle>();
         h->face = face;
         h->px = std::max(6.0f, d.size * opt.text_zoom);
