@@ -101,15 +101,24 @@ make -C 3ds
 
 That produces `3ds/clamshell.3dsx`. `make -C 3ds selftest` builds the scripted variant the emulator tests use.
 
+## Running on Anki's own backend (experimental)
+
+Clamshell can also be built on Anki's real backend, compiled for the 3DS, instead of its own C++ port. The collection, scheduling, card rendering and sync are then upstream Anki code, and Clamshell's renderer, scripts, controls, magnifier and scratchpad sit on top. This builds on [Alex Molina's Anki 3DS](https://github.com/AlexMolina08/anki-3ds), which first got Anki's backend running on the console.
+
+- The backend lives in an Anki fork (Alex's port plus a `3ds/clamshell-bridge` crate), built as a static library with Rust nightly and `cargo-3ds`. Alex's `3ds/setup.sh` installs the toolchain; then `3ds/clamshell-bridge/build-3ds.sh` builds `out/3ds/clamshell-bridge/libclamshell_bridge.a`. Build from a path without spaces, or curl's configure step fails.
+- `make -C 3ds anki BRIDGE=path/to/libclamshell_bridge.a` builds `clamshell-anki.3dsx`, which shows as "Clamshell (Anki backend)" in the Homebrew Launcher. It uses the same `sdmc:/3ds/clamshell/` folder as the normal build.
+- `app/engine.h` is the seam: `engine_anki.cpp` talks to the bridge, `engine_cpp.cpp` to the C++ port, and the rest of the app is the same for both.
+- In the Azahar emulator (New 3DS mode), the backend build signs in, downloads a 17,000-card collection, studies, undoes, buries, flags, marks and syncs, with reviews arriving on desktop. Rating a card and seeing the next takes about 0.17 s there, against about 0.1 s for the C++ build. It's about 21 MB, against 10 MB, and needs a New 3DS.
+
 ## How it works
 
 - `core/` is portable C++17 that builds for both the 3DS and desktop: the collection (SQLite, schema 18), the scheduler (`states.cpp`, `fsrs.cpp`, `rng.cpp`, ported from Anki's `rslib`, the `fsrs` crate and the parts of Rust's `rand` Anki uses, so random choices are bit-identical), the queue builder (`queue.cpp`), sync protocol v11 (`sync.cpp`), templates and media.
-- `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml) and draws it in software: stb_truetype with the DejaVu fonts, stb_image, libwebp and nanosvg, plus a small MathJax-to-HTML converter.
+- `core/render/` lays out card HTML with [litehtml](https://github.com/litehtml/litehtml) and draws it in software: stb_truetype with Roboto for card text (as on AnkiDroid) and DejaVu for the interface and any characters Roboto lacks, stb_image, libwebp and nanosvg, plus a small MathJax-to-HTML converter.
 - `core/js/` runs template JavaScript with [QuickJS-ng](https://github.com/quickjs-ng/quickjs) against a DOM built with gumbo, then hands the resulting HTML to the renderer.
 - `app/` is the interface, drawn into two canvases. `3ds/source/` puts them on the screens and provides the SD card, networking (mbedTLS with a bundled CA list, since the console's own TLS is too old) and input. `host/` runs the same app on a desktop for testing.
 
 ## Licence
 
-AGPL-3.0-or-later (see [LICENSE](LICENSE)), because it ports code from Anki, which is AGPL-3.0-or-later. Bundled third-party code keeps its own licence: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), DejaVu fonts (Bitstream Vera licence) and the Mozilla CA bundle (MPL-2.0).
+AGPL-3.0-or-later (see [LICENSE](LICENSE)), because it ports code from Anki, which is AGPL-3.0-or-later. Bundled third-party code keeps its own licence: SQLite (public domain), zstd (BSD), mbedTLS (Apache-2.0), litehtml and gumbo (BSD/Apache-2.0), QuickJS-ng (MIT), libwebp (BSD), nlohmann/json (MIT), stb (public domain/MIT), nanosvg (zlib), Roboto (Apache-2.0), DejaVu fonts (Bitstream Vera licence) and the Mozilla CA bundle (MPL-2.0).
 
 This project isn't made or endorsed by Ankitects or the Anki team.
