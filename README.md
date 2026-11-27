@@ -105,8 +105,26 @@ That produces `3ds/clamshell.3dsx`. `make -C 3ds selftest` builds the scripted v
 
 Clamshell can also be built on Anki's real backend, compiled for the 3DS, instead of its own C++ port. The collection, scheduling, card rendering and sync are then upstream Anki code, and Clamshell's renderer, scripts, controls, magnifier and scratchpad sit on top. This builds on [Alex Molina's Anki 3DS](https://github.com/AlexMolina08/anki-3ds), which first got Anki's backend running on the console.
 
-- The backend lives in an Anki fork (Alex's port plus a `3ds/clamshell-bridge` crate), built as a static library with Rust nightly and `cargo-3ds`. Alex's `3ds/setup.sh` installs the toolchain; then `3ds/clamshell-bridge/build-3ds.sh` builds `out/3ds/clamshell-bridge/libclamshell_bridge.a`. Build from a path without spaces, or curl's configure step fails.
-- `make -C 3ds anki BRIDGE=path/to/libclamshell_bridge.a` builds `clamshell-anki.3dsx`, which shows as "Clamshell (Anki backend)" in the Homebrew Launcher. It uses the same `sdmc:/3ds/clamshell/` folder as the normal build.
+- The backend lives in [Sabicool/clamshell-anki](https://github.com/Sabicool/clamshell-anki), a fork of Alex's port with a `3ds/clamshell-bridge` crate added, checked out here as the `anki` submodule. Following Anki's releases stays an ordinary merge there.
+- To build it (Linux or macOS, with devkitPro's 3ds-dev, Python 3.11+, CMake, protoc and rustup):
+
+```bash
+git submodule update --init --depth 1 anki
+```
+
+```bash
+bash anki/3ds/setup.sh
+```
+
+```bash
+bash anki/3ds/clamshell-bridge/build-3ds.sh
+```
+
+```bash
+make -C 3ds anki
+```
+
+  The first builds Rust nightly, `cargo-3ds`, mbedTLS and curl; the second compiles Anki's backend into `anki/out/3ds/clamshell-bridge/libclamshell_bridge.a` (a first build takes a while); the third links `3ds/clamshell-anki.3dsx`, which shows as "Clamshell (Anki backend)" in the Homebrew Launcher and uses the same `sdmc:/3ds/clamshell/` folder as the normal build. `BRIDGE=path/to/libclamshell_bridge.a` points it at a bridge built elsewhere. CI builds it on every push too.
 - `app/engine.h` is the seam: `engine_anki.cpp` talks to the bridge, `engine_cpp.cpp` to the C++ port, and the rest of the app is the same for both.
 - In the Azahar emulator (New 3DS mode), the backend build signs in, downloads a 17,000-card collection, studies, undoes, buries, flags, marks and syncs, with reviews arriving on desktop. Rating a card and seeing the next takes about 0.17 s there, against about 0.1 s for the C++ build. It's about 21 MB, against 10 MB, and needs a New 3DS.
 

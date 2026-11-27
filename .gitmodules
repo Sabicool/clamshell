@@ -1,0 +1,5 @@
+[submodule "anki"]
+	path = anki
+	url = https://github.com/Sabicool/clamshell-anki.git
+	branch = clamshell
+	shallow = true

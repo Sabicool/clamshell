@@ -50,6 +50,45 @@ jobs:
           name: clamshell-3dsx
           path: 3ds/clamshell.3dsx
 
+  build-3ds-anki:
+    name: 3DS build on Anki's backend
+    runs-on: ubuntu-24.04
+    # the image Alex Molina's Anki 3DS CI uses
+    container: devkitpro/devkitarm@sha256:15b79ce75822c289538d8153da5fa7aafe5e6adc32ad8a575a197beca0f0761b
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            anki/out/3ds/collection-target
+            anki/out/3ds/https-sources
+          key: anki-bridge-${{ runner.os }}-${{ hashFiles('anki/Cargo.lock', 'anki/3ds/dependencies.json') }}
+      - name: Install the Rust toolchain and build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 clang libclang-dev protobuf-compiler libssl-dev pkg-config cmake patch
+          git config --global --add safe.directory '*'
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh
+          sh /tmp/rustup.sh -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Set up Anki's 3DS build
+        run: bash anki/3ds/setup.sh
+      - name: Build Anki's backend for the 3DS
+        run: bash anki/3ds/clamshell-bridge/build-3ds.sh
+      - name: Build clamshell-anki.3dsx
+        run: make -C 3ds anki -j"$(nproc)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clamshell-anki-3dsx
+          path: 3ds/clamshell-anki.3dsx
+
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')

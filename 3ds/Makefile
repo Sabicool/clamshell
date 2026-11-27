@@ -52,8 +52,9 @@ else
 # On Anki's backend (BRIDGE = libclamshell_bridge.a from the Anki fork):
 # SQLite, zstd, curl and mbedTLS come from the bridge, and the C library's time
 # functions are wrapped so the 3DS's local-time clock reads as UTC.
-# The bridge carries pthread-3ds, the thread layer Rust's std expects on the 3DS;
-# where libctru defines the same pthread functions, the bridge's are used.
+# The bridge also carries copies of some libctru objects, hence
+# --allow-multiple-definition. Its Rust code uses pthread-3ds under renamed
+# rs_pthread_* symbols, so C and C++ code here keeps libctru's pthread.
 LIBS := $(BRIDGE) -Wl,--wrap=time -Wl,--wrap=clock_gettime -Wl,--allow-multiple-definition $(LIBS)
 endif
 
@@ -63,11 +64,15 @@ all: $(TARGET).3dsx
 selftest:
 	$(MAKE) BUILD=build-selftest TARGET=clamshell-selftest EXTRA_FLAGS=-DANKI3DS_SELFTEST
 
-# On Anki's own backend: make -C 3ds anki BRIDGE=/path/to/libclamshell_bridge.a
-anki:
-	$(MAKE) BUILD=build-anki TARGET=clamshell-anki APP_TITLE="Clamshell (Anki backend)" EXTRA_FLAGS=-DCLAMSHELL_ANKI BRIDGE=$(BRIDGE)
-anki-selftest:
-	$(MAKE) BUILD=build-anki-selftest TARGET=clamshell-selftest EXTRA_FLAGS="-DCLAMSHELL_ANKI -DANKI3DS_SELFTEST" BRIDGE=$(BRIDGE)
+# On Anki's own backend: make -C 3ds anki, after building the bridge in the
+# anki submodule (see the README), or with BRIDGE=/path/to/libclamshell_bridge.a
+ANKI_BRIDGE := $(or $(BRIDGE),../anki/out/3ds/clamshell-bridge/libclamshell_bridge.a)
+anki-bridge-check:
+	@test -f "$(ANKI_BRIDGE)" || { echo "No bridge at $(ANKI_BRIDGE): build it with anki/3ds/clamshell-bridge/build-3ds.sh, or pass BRIDGE=" >&2; exit 1; }
+anki: anki-bridge-check
+	$(MAKE) BUILD=build-anki TARGET=clamshell-anki APP_TITLE="Clamshell (Anki backend)" EXTRA_FLAGS=-DCLAMSHELL_ANKI BRIDGE="$(ANKI_BRIDGE)"
+anki-selftest: anki-bridge-check
+	$(MAKE) BUILD=build-anki-selftest TARGET=clamshell-selftest EXTRA_FLAGS="-DCLAMSHELL_ANKI -DANKI3DS_SELFTEST" BRIDGE="$(ANKI_BRIDGE)"
 
 $(BUILD)/source/%.cpp.o: source/%.cpp
 	@mkdir -p $(dir $@)
@@ -118,4 +123,4 @@ $(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh $(shell find romfs -type f)
 clean:
 	rm -rf build build-selftest build-anki build-anki-selftest *.elf *.3dsx *.smdh
 
-.PHONY: all clean selftest anki anki-selftest
+.PHONY: all clean selftest anki anki-selftest anki-bridge-check
