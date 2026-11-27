@@ -638,7 +638,7 @@ static inline int js_exepath(char* buffer, size_t* size);
 
 /* Cross-platform threading APIs. */
 
-#if defined(EMSCRIPTEN) || defined(__wasi__) || defined(__DJGPP)
+#if defined(EMSCRIPTEN) || defined(__wasi__) || defined(__DJGPP) || defined(__3DS__)
 
 #define JS_HAVE_THREADS 0
 
