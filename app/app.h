@@ -141,12 +141,23 @@ private:
         std::string html;
         std::unique_ptr<CardView> view;
     };
-    std::unique_ptr<Prefetch> prefetch_;
+    std::unique_ptr<Prefetch> prefetch_;           // ready to show
+    std::unique_ptr<Prefetch> prefetch_building_;  // being prepared, one step per idle frame
+    int prefetch_stage_ = 0;
     bool prefetch_due_ = false;
+    void cancel_prefetch();
+    // The answer side, prepared while the question is on screen: its script
+    // runs one idle frame, it's laid out the next. Stage 0 nothing, 1 script
+    // due, 2 layout due, 3 ready.
+    int answer_stage_ = 0;
+    std::string answer_html_;
+    std::unique_ptr<CardView> answer_view_;
+    CardViewOptions answer_opts_;
+    void answer_step();
     int unsynced_reviews_ = 0;  // shown before a full download replaces this copy
     bool download_requested_ = false;  // chosen in Settings rather than required by the server
     void confirm_download(bool requested);
-    void prefetch_next();
+    void prefetch_step();  // one step of preparing the next card; clears prefetch_due_ when done
 
     // touch menu (bury, suspend, flag, mark, scratchpad) and the scratchpad itself
     bool menu_open_ = false;

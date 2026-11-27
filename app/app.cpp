@@ -83,7 +83,8 @@ static std::string fmt_offset(int32_t minutes_west) {
 // ---------------------------------------------------------------- lifecycle
 
 App::App(Platform& p) : pf_(p) {}
-App::~App() = default;
+void flush_timing(const std::string& dir);
+App::~App() { flush_timing(pf_.data_dir()); }
 
 void App::init() {
     std::string dir = pf_.data_dir();
@@ -194,8 +195,10 @@ bool App::frame(const Input& in) {
     }
     // the frame after the answer appeared, with no button pressed: lay out the next card
     if (prefetch_due_ && mode_ == Mode::Review && !in.down && !in.touch_down) {
-        prefetch_due_ = false;
-        prefetch_next();
+        prefetch_step();
+    }
+    if (answer_stage_ == 1 || answer_stage_ == 2) {
+        if (mode_ == Mode::Review && !answer_shown_ && !in.down && !in.touch_down) answer_step();
     }
     switch (mode_) {
         case Mode::Setup: on_setup(in); break;
@@ -642,28 +645,45 @@ static const struct {
 } FLAGS[] = {{"red", 230, 60, 60},   {"orange", 245, 150, 40}, {"green", 60, 170, 80},  {"blue", 60, 120, 230},
              {"pink", 240, 110, 190}, {"turquoise", 40, 190, 190}, {"purple", 150, 90, 210}};
 
-// Self-test builds record how long each loading step takes, in timing.txt
-#ifdef ANKI3DS_SELFTEST
-#define STEP_TIME(label)                                                                           \
-    do {                                                                                           \
-        int64_t now_ = pf_.local_clock_ms();                                                       \
-        if (FILE* f_ = fopen((pf_.data_dir() + "/timing.txt").c_str(), "ab")) {                   \
-            fprintf(f_, "%s %lld ms\n", label, (long long)(now_ - step_t_));                         \
-            fclose(f_);                                                                            \
-        }                                                                                          \
-        step_t_ = pf_.local_clock_ms();                                                            \
-    } while (0)
+// How long each step of studying takes, in timing.txt in the data folder:
+// written at once by self-test builds, otherwise kept in memory and written
+// a few kilobytes at a time (and when leaving a deck), to keep SD writes rare.
 static int64_t step_t_ = 0;
+static std::string timing_buf_;
+void flush_timing(const std::string& dir) {
+    if (timing_buf_.empty()) return;
+    std::string path = dir + "/timing.txt";
+    FILE* f = fopen(path.c_str(), "ab");
+    if (f && ftell(f) > 256 * 1024) {
+        fclose(f);
+        f = fopen(path.c_str(), "wb");
+    }
+    if (f) {
+        fwrite(timing_buf_.data(), 1, timing_buf_.size(), f);
+        fclose(f);
+    }
+    timing_buf_.clear();
+}
+#define STEP_MARK() (step_t_ = pf_.local_clock_ms())
+#ifdef ANKI3DS_SELFTEST
+#define TIMING_FLUSH_AT 0
 #else
-#define STEP_TIME(label) ((void)0)
+#define TIMING_FLUSH_AT 4096
 #endif
+#define STEP_TIME(label)                                                          \
+    do {                                                                          \
+        int64_t now_ = pf_.local_clock_ms();                                      \
+        char line_[96];                                                           \
+        snprintf(line_, sizeof line_, "%s %lld ms\n", label, (long long)(now_ - step_t_)); \
+        timing_buf_ += line_;                                                     \
+        if (timing_buf_.size() > TIMING_FLUSH_AT) flush_timing(pf_.data_dir());   \
+        step_t_ = pf_.local_clock_ms();                                           \
+    } while (0)
 
 void App::start_review(int64_t deck_id) {
-    prefetch_.reset();
+    cancel_prefetch();
     prefetch_due_ = false;
-#ifdef ANKI3DS_SELFTEST
-    step_t_ = pf_.local_clock_ms();
-#endif
+    STEP_MARK();
     deck_id_ = deck_id;
     progress("Loading…", "Building today's queue");
     std::string err;
@@ -685,9 +705,7 @@ void App::start_review(int64_t deck_id) {
 }
 
 void App::next_card() {
-#ifdef ANKI3DS_SELFTEST
-    step_t_ = pf_.local_clock_ms();
-#endif
+    STEP_MARK();
     std::string err;
     card_ = engine_->next(counts_, next_id_, err, prefetch_ ? prefetch_->card_id : 0);
     if (card_ && card_->prepared && prefetch_ && prefetch_->card_id == card_->id) {
@@ -705,7 +723,7 @@ void App::next_card() {
         card_->marked = p.marked;
     } else if (card_ && card_->prepared) {
         // shouldn't happen, but render it rather than show nothing
-        prefetch_.reset();
+        cancel_prefetch();
         if (auto full = engine_->render(card_->id)) {
             full->kind = card_->kind;
             full->labels = card_->labels;
@@ -738,11 +756,11 @@ void App::next_card() {
         script_ = std::move(prefetch_->script);
         current_html_ = std::move(prefetch_->html);
         std::swap(view_, prefetch_->view);
-        prefetch_.reset();
+        cancel_prefetch();
         dirty = true;
         STEP_TIME("  prefetched");
     } else {
-        prefetch_.reset();
+        cancel_prefetch();
         rendered_.question = card_->question;
         rendered_.answer = card_->answer;
         rendered_.css = card_->css;
@@ -763,6 +781,8 @@ void App::next_card() {
     shown_at_ms_ = pf_.local_clock_ms();
     mode_ = Mode::Review;
     dirty = true;
+    answer_view_.reset();
+    answer_stage_ = 1;
 }
 
 CardViewOptions App::view_options() const {
@@ -789,35 +809,105 @@ void App::render_current() {
 #endif
 }
 
-void App::prefetch_next() {
+void App::cancel_prefetch() {
     prefetch_.reset();
-    if (!next_id_) return;
-    auto c = engine_->render(next_id_);
-    if (!c) return;
-    auto p = std::make_unique<Prefetch>();
-    p->card_id = c->id;
-    p->card = *c;
-    p->rendered.question = c->question;
-    p->rendered.answer = c->answer;
-    p->rendered.css = c->css;
-    p->rendered.ord = c->ord;
-    if (settings_.run_scripts) {
-        p->script = std::make_unique<js::CardScript>();
-        p->html = p->script->run(p->rendered.question, js_storage_);
-    } else {
-        p->html = p->rendered.question;
+    prefetch_building_.reset();
+    prefetch_stage_ = 0;
+}
+
+// Preparing the next card takes three steps (Anki renders it, its script
+// runs, it's laid out), one per frame, so a button pressed meanwhile waits
+// for one step rather than all three.
+void App::prefetch_step() {
+    if (prefetch_stage_ == 0) {
+        cancel_prefetch();
+        if (!next_id_) {
+            prefetch_due_ = false;
+            return;
+        }
+        STEP_MARK();
+        auto c = engine_->render(next_id_);
+        STEP_TIME("prefetch: Anki render");
+        if (!c) {
+            prefetch_due_ = false;
+            return;
+        }
+        auto p = std::make_unique<Prefetch>();
+        p->card_id = c->id;
+        p->card = *c;
+        p->rendered.question = c->question;
+        p->rendered.answer = c->answer;
+        p->rendered.css = c->css;
+        p->rendered.ord = c->ord;
+        prefetch_building_ = std::move(p);
+        prefetch_stage_ = 1;
+        return;
     }
+    Prefetch* p = prefetch_building_.get();
+    if (!p) {
+        prefetch_stage_ = 0;
+        prefetch_due_ = false;
+        return;
+    }
+    if (prefetch_stage_ == 1) {
+        STEP_MARK();
+        if (settings_.run_scripts) {
+            p->script = std::make_unique<js::CardScript>();
+            p->html = p->script->run(p->rendered.question, js_storage_);
+        } else {
+            p->html = p->rendered.question;
+        }
+        STEP_TIME("prefetch: card script");
+        prefetch_stage_ = 2;
+        return;
+    }
+    STEP_MARK();
     p->view = std::make_unique<CardView>(fonts_);
     CardViewOptions opt = view_options();
     opt.reveal_hidden = false;  // question side
     p->view->render(p->html, p->rendered.css, p->rendered.ord, opt);
-    prefetch_ = std::move(p);
+    STEP_TIME("prefetch: layout");
+    prefetch_ = std::move(prefetch_building_);
+    prefetch_stage_ = 0;
+    prefetch_due_ = false;
+}
+
+void App::answer_step() {
+    STEP_MARK();
+    if (answer_stage_ == 1) {
+        answer_html_ = script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
+        STEP_TIME("answer ahead: card script");
+        answer_stage_ = 2;
+        return;
+    }
+    answer_opts_ = view_options();
+    answer_opts_.reveal_hidden = settings_.reveal_hidden;  // as it will be once the answer shows
+    answer_view_ = std::make_unique<CardView>(fonts_);
+    answer_view_->render(answer_html_, rendered_.css, rendered_.ord, answer_opts_);
+    STEP_TIME("answer ahead: layout");
+    answer_stage_ = 3;
 }
 
 void App::show_answer() {
+    STEP_MARK();
     answer_shown_ = true;
-    current_html_ = script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
-    render_current();
+    int stage = answer_stage_;
+    answer_stage_ = 0;
+    current_html_ = stage >= 2 ? answer_html_ : script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
+    STEP_TIME("answer: card script");
+    CardViewOptions now = view_options();
+    if (stage == 3 && answer_view_ && now.text_zoom == answer_opts_.text_zoom &&
+        now.night_mode == answer_opts_.night_mode && now.reveal_hidden == answer_opts_.reveal_hidden) {
+        std::swap(view_, answer_view_);
+        dirty = true;
+        zoom_dirty_ = true;
+        if (zoom_open_) clamp_zoom();
+        STEP_TIME("answer: prepared");
+    } else {
+        render_current();
+        STEP_TIME("answer: layout+draw");
+    }
+    answer_view_.reset();
     int anchor = view_->answer_anchor();
     scroll_ = anchor > 60 ? std::min(anchor - 40, max_scroll()) : 0;
     dirty = true;
@@ -827,9 +917,7 @@ void App::show_answer() {
 void App::answer(Rating r) {
     if (!card_) return;
     uint32_t millis = (uint32_t)std::max<int64_t>(0, pf_.local_clock_ms() - shown_at_ms_);
-#ifdef ANKI3DS_SELFTEST
-    step_t_ = pf_.local_clock_ms();
-#endif
+    STEP_MARK();
     std::string err;
     if (!engine_->answer((int)r, millis, err)) {
         show_message("Couldn't save the answer", err, Mode::Decks);
@@ -846,7 +934,7 @@ void App::undo() {
     std::string err;
     if (!engine_->undo(was_answer, err)) return;
     if (was_answer && reviewed_ > 0) reviewed_--;
-    prefetch_.reset();
+    cancel_prefetch();
     status_ = "Undid the last change";
     next_card();
 }
@@ -977,7 +1065,7 @@ void App::card_action(CardAction op, int flag) {
                       : op == CardAction::BuryNote    ? "Buried the note"
                       : op == CardAction::SuspendCard ? "Suspended the card"
                                                       : "Suspended the note";
-            prefetch_.reset();
+            cancel_prefetch();
             next_card();
             card_note_ = status_ + " (SELECT to undo)";
             break;
@@ -1018,7 +1106,7 @@ void App::run_action(const std::string& a) {
     } else if (a == "zoom") {
         open_zoom();
     } else if (a == "undo") {
-        prefetch_.reset();
+        cancel_prefetch();
         undo();
     } else if (a == "menu") {
         menu_open_ = true;
@@ -1039,8 +1127,17 @@ void App::run_action(const std::string& a) {
         card_action(Op::SetFlag, card_ && (card_->flags & 7) == f ? 0 : f);  // pressing again removes it
     } else if (a.rfind("key:", 0) == 0 && script_) {
         // the card's script may change shared storage, so the prepared next card is redone
-        prefetch_.reset();
+        cancel_prefetch();
         if (answer_shown_) prefetch_due_ = true;
+        if (!answer_shown_ && answer_stage_ >= 2) {
+            // the answer was prepared in this script already: start it again on the question
+            script_ = std::make_unique<js::CardScript>();
+            current_html_ = script_->run(rendered_.question, js_storage_);
+        }
+        if (!answer_shown_) {
+            answer_view_.reset();
+            answer_stage_ = 1;
+        }
         if (script_->key(a.substr(4))) {
             current_html_ = script_->html();
             int keep = scroll_;
@@ -1284,14 +1381,15 @@ void App::on_review(const Input& in) {
         }
     }
     if (in.down & K_START) {
-        prefetch_.reset();
+        cancel_prefetch();
+        flush_timing(pf_.data_dir());
         build_rows();
         mode_ = Mode::Decks;
         sync_after_studying();
         return;
     }
     if (in.down & K_SELECT) {
-        prefetch_.reset();
+        cancel_prefetch();
         undo();
         return;
     }
