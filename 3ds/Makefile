@@ -31,7 +31,10 @@ CFLAGS := $(COMMON) -std=gnu11
 CXXFLAGS := $(COMMON) -std=gnu++17
 SQLITE_FLAGS := -DSQLITE_OS_OTHER=1 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL \
 	-DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_TEMP_STORE=3 -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_DEFAULT_CACHE_SIZE=-4000
-LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,--gc-sections -L$(DEVKITPRO)/libctru/lib
+# -u pthread_cancel: libstdc++ only treats the program as threaded (real locks
+# in std::mutex, atomic shared_ptr counts) if pthread_cancel is linked in, and
+# nothing else pulls it in. Without it, every C++ lock silently does nothing.
+LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,--gc-sections -L$(DEVKITPRO)/libctru/lib -Wl,--wrap=abort -Wl,-u,pthread_cancel
 LIBS := -lctru -lm
 
 APP_SRC := $(wildcard source/*.cpp) $(wildcard source/*.c)

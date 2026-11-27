@@ -27,6 +27,18 @@ struct CardViewOptions {
 
 class CardContainer;
 
+// Time spent in each stage of CardView::render, added up (for profiling)
+struct RenderTimes {
+    double prep_ms = 0, parse_ms = 0, layout_ms = 0, draw_ms = 0;
+};
+extern RenderTimes g_render_times;
+
+// A media file's image, decoded and scaled for the screen; cached. Safe to
+// call from another thread (the app decodes images ahead on its worker).
+std::shared_ptr<Image> load_media_image(const std::string& media_dir, const std::string& name);
+// Decodes the images a card's HTML refers to, so showing it later is quick.
+void preload_media_images(const std::string& media_dir, const std::string& html);
+
 class CardView {
 public:
     explicit CardView(FontLib& fonts);

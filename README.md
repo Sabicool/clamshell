@@ -124,7 +124,7 @@ bash anki/3ds/clamshell-bridge/build-3ds.sh
 make -C 3ds anki
 ```
 
-  The first builds Rust nightly, `cargo-3ds`, mbedTLS and curl; the second compiles Anki's backend into `anki/out/3ds/clamshell-bridge/libclamshell_bridge.a` (a first build takes a while); the third links `3ds/clamshell-anki.3dsx`, which shows as "Clamshell (Anki backend)" in the Homebrew Launcher and uses the same `sdmc:/3ds/clamshell/` folder as the normal build. `BRIDGE=path/to/libclamshell_bridge.a` points it at a bridge built elsewhere. CI builds it on every push too.
+  `setup.sh` installs Rust nightly and `cargo-3ds` and builds mbedTLS and curl; `build-3ds.sh` compiles Anki's backend into `anki/out/3ds/clamshell-bridge/libclamshell_bridge.a` (a first build takes a while); `make` links `3ds/clamshell-anki.3dsx`, which shows as "Clamshell (Anki backend)" in the Homebrew Launcher and uses the same `sdmc:/3ds/clamshell/` folder as the normal build. `BRIDGE=path/to/libclamshell_bridge.a` points it at a bridge built elsewhere. CI builds it on every push too.
 - `app/engine.h` is the seam: `engine_anki.cpp` talks to the bridge, `engine_cpp.cpp` to the C++ port, and the rest of the app is the same for both.
 - In the Azahar emulator (New 3DS mode), the backend build signs in, downloads a 17,000-card collection, studies, undoes, buries, flags, marks and syncs, with reviews arriving on desktop. Rating a card and seeing the next takes about 0.17 s there, against about 0.1 s for the C++ build. It's about 21 MB, against 10 MB, and needs a New 3DS.
 

@@ -65,7 +65,7 @@ $(BUILD)/sqlite3.o: third_party/sqlite/sqlite3.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/host/%.o: host/%.cpp $(wildcard core/*.h)
+$(BUILD)/host/%.o: host/%.cpp $(wildcard core/*.h core/render/*.h core/js/*.h app/*.h)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 

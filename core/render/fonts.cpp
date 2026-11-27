@@ -75,6 +75,7 @@ FaceId FontLib::resolve(FaceId face, uint32_t cp) {
 }
 
 FontMetricsPx FontLib::metrics(FaceId face, float px) {
+    std::lock_guard<std::recursive_mutex> lock(m_);
     FontMetricsPx m;
     if (!loaded()) return m;
     if (face >= FACE_CARD && !faces_[face]) face = (FaceId)(face - FACE_CARD);
@@ -132,6 +133,7 @@ const FontLib::Glyph& FontLib::glyph(FaceId face, float px, uint32_t cp, FaceId&
 }
 
 float FontLib::text_width(FaceId face, float px, const char* s, size_t len) {
+    std::lock_guard<std::recursive_mutex> lock(m_);
     if (!loaded() || !s) return 0;
     if (len == (size_t)-1) len = strlen(s);
     const char* p = s;
@@ -146,6 +148,7 @@ float FontLib::text_width(FaceId face, float px, const char* s, size_t len) {
 }
 
 float FontLib::draw(Canvas& c, FaceId face, float px, float x, float y, const char* s, uint32_t argb, size_t len) {
+    std::lock_guard<std::recursive_mutex> lock(m_);
     if (!loaded() || !s) return 0;
     if (len == (size_t)-1) len = strlen(s);
     FontMetricsPx m = metrics(face, px);

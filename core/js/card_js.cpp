@@ -1,5 +1,7 @@
 #include "card_js.h"
 
+#include <mutex>
+
 #include <chrono>
 #include <cstring>
 
@@ -367,7 +369,13 @@ struct CardScript::Impl {
     // The prelude is the same for every card, so it is compiled once and the
     // bytecode reused; parsing it per card was a noticeable part of each card's load time.
     bool run_prelude(std::string& log) {
-        static std::vector<uint8_t> bytecode;
+        static std::mutex bytecode_lock;  // scripts may run on two threads
+        static std::vector<uint8_t> shared_bytecode;
+        std::vector<uint8_t> bytecode;
+        {
+            std::lock_guard<std::mutex> l(bytecode_lock);
+            bytecode = shared_bytecode;
+        }
         JSValue fn;
         if (bytecode.empty()) {
             fn = JS_Eval(ctx, PRELUDE, strlen(PRELUDE), "prelude", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -377,14 +385,18 @@ struct CardScript::Impl {
             }
             size_t n = 0;
             if (uint8_t* buf = JS_WriteObject(ctx, &n, fn, JS_WRITE_OBJ_BYTECODE)) {
-                bytecode.assign(buf, buf + n);
+                std::lock_guard<std::mutex> l(bytecode_lock);
+                shared_bytecode.assign(buf, buf + n);
                 js_free(ctx, buf);
             }
         } else {
             fn = JS_ReadObject(ctx, bytecode.data(), bytecode.size(), JS_READ_OBJ_BYTECODE);
             if (JS_IsException(fn)) {
                 JS_FreeValue(ctx, JS_GetException(ctx));
-                bytecode.clear();
+                {
+                    std::lock_guard<std::mutex> l(bytecode_lock);
+                    shared_bytecode.clear();
+                }
                 return eval(PRELUDE, "prelude", log);
             }
         }
@@ -476,6 +488,9 @@ void CardScript::run_scripts(bool first) {
 
 std::string CardScript::show_answer(const std::string& body_html) {
     if (!impl_ || !impl_->ctx) return body_html;
+    // the app may run this on another thread than run() was: QuickJS measures
+    // its stack limit from the calling thread's stack
+    JS_UpdateStackTop(impl_->rt);
     Node* qa = impl_->dom.by_id("qa");
     if (!qa) qa = impl_->dom.body();
     impl_->dom.set_inner_html(qa, body_html);
@@ -503,6 +518,7 @@ void CardScript::sync_storage_out() {
 
 bool CardScript::key(const std::string& spec) {
     if (!impl_ || !impl_->ctx) return false;
+    JS_UpdateStackTop(impl_->rt);
     int before = impl_->dom.version;
     // spec is a KeyboardEvent.code, optionally "Alt+"-prefixed: KeyN, Digit1, ArrowLeft, Alt+Digit3
     bool alt = spec.rfind("Alt+", 0) == 0;

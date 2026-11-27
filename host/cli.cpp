@@ -1,3 +1,4 @@
+#include <chrono>
 // Desktop test harness for the portable core. Used by tools/difftest.py to
 // compare this implementation against the real Anki engine, and handy for
 // poking at a collection without a 3DS.
@@ -355,6 +356,59 @@ int main(int argc, char** argv) {
         }
 
         printf("answer: %d px tall (answer anchor at %d)\n", view.content_height(), view.answer_anchor());
+        return 0;
+    }
+    if (cmd == "bench") {
+        // anki3ds-cli bench <collection> [n] [media dir]: time rendering n review cards
+        int n = argc > 3 ? atoi(argv[3]) : 40;
+        FontLib fonts;
+        std::string exe = argv[0];
+        std::string root = exe.substr(0, exe.rfind("/build/"));
+        if (!fonts.load(root + "/3ds/romfs/fonts", err)) { fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        CardViewOptions opt;
+        if (argc > 4) opt.media_dir = argv[4];
+        std::vector<int64_t> ids;
+        {
+            Stmt s(col.db(), "select id from cards where queue = 2 order by due, id limit ?");
+            s.bind(1, (int64_t)n);
+            while (s.step()) ids.push_back(s.i64(0));
+        }
+        auto ms = [] {
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        };
+        double tmpl = 0, js_q = 0, js_a = 0;
+        std::map<std::string, std::string> storage;
+        for (int64_t id : ids) {
+            auto card = col.get_card(id);
+            if (!card) continue;
+            double a = ms();
+            RenderedCard r = render_card(col, *card);
+            double b = ms();
+            js::CardScript qs;
+            std::string q = qs.run(r.question, storage);
+            double c = ms();
+            CardView v(fonts);
+            v.render(q, r.css, r.ord, opt);
+            double d = ms();
+            std::string an = qs.show_answer(r.answer);
+            double e = ms();
+            v.render(an, r.css, r.ord, opt);
+            if (getenv("BENCH_SIZES")) {
+                size_t tags = 0;
+                for (size_t i = 0; i + 1 < an.size(); i++) if (an[i] == '<' && an[i + 1] != '/') tags++;
+                printf("card %lld: question %zu bytes, answer %zu bytes, ~%zu elements, css %zu bytes\n", (long long)id,
+                       q.size(), an.size(), tags, r.css.size());
+            }
+            tmpl += b - a;
+            js_q += c - b;
+            js_a += e - d;
+        }
+        size_t k = ids.size() ? ids.size() : 1;
+        auto& t = g_render_times;
+        printf("%zu cards, per card (question + answer):\n", ids.size());
+        printf("  template %.1f ms, script q %.1f a %.1f ms\n", tmpl / k, js_q / k, js_a / k);
+        printf("  render: prep %.1f, parse+css %.1f, layout %.1f, draw %.1f ms\n", t.prep_ms / k, t.parse_ms / k,
+               t.layout_ms / k, t.draw_ms / k);
         return 0;
     }
     if (cmd == "render") {

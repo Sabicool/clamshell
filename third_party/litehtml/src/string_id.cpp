@@ -1,6 +1,7 @@
 #include "html.h"
 #include "string_id.h"
 #include <cassert>
+#include <deque>
 
 #ifndef LITEHTML_NO_THREADS
 	#include <mutex>
@@ -14,7 +15,8 @@ namespace litehtml
 {
 
 static std::map<string, string_id> map;
-static std::vector<string> array;
+// a deque: _s() hands out references, which must survive another thread adding names
+static std::deque<string> array;
 
 static int init()
 {

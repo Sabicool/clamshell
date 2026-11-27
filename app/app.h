@@ -1,6 +1,7 @@
 // The Clamshell application: screens, input handling and flows. Platform code
 // (3ds/source/main.cpp, host/sim.cpp) feeds input and shows the two canvases.
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "template.h"
 #include "ui.h"
 #include "js/card_js.h"
+#include "worker.h"
 
 namespace anki {
 
@@ -86,6 +88,9 @@ public:
     bool frame(const Input& in);
     Canvas top{400, 240}, bottom{320, 240};
     bool dirty = true;
+    uint32_t draws = 0;  // goes up whenever top or bottom is redrawn: the platform copies them to the screens then
+    // writes the timing log kept in memory (also when the app is about to crash)
+    void flush_logs();
     Mode mode() const { return mode_; }
     // Test hook for the simulator: select the first deck row whose name contains `needle`.
     bool debug_select(const std::string& needle);
@@ -95,6 +100,32 @@ private:
     FontLib fonts_;
     Settings settings_;
     std::unique_ptr<Engine> engine_;  // the collection: Anki's backend or the C++ port
+    // Answers are saved on worker_ while the next card is already showing.
+    // Everything else reaches the collection through eng(), which first waits
+    // for that and applies its result, so calls never overlap or reorder.
+    Worker worker_;
+    // Prepares cards ahead (decoding their images, the slowest part on a 3DS,
+    // running their scripts, laying them out) on its own thread, so the
+    // interface never waits and collection calls never queue behind it.
+    Worker prep_{4 * 1024 * 1024};  // HTML layout and card scripts recurse deeply
+    struct AnswerJob {
+        bool ok = false;
+        std::string err, io;
+        std::optional<StudyCard> card;  // what the backend says comes next
+        DeckCounts counts;
+        int64_t next_id = 0;
+        bool can_undo = false;
+        std::optional<StudyCard> next_render;  // the card after that, rendered by Anki
+        int64_t started_ms = 0, saved_ms = 0;
+    };
+    AnswerJob job_;
+    bool job_pending_ = false;
+    std::atomic<bool> job_done_{false};
+    int64_t pending_id_ = 0;  // the card shown before the backend confirmed it
+    Engine* eng();
+    void finish_job();
+    void apply_job();
+    void present_card(const std::string& err);  // shows card_, the result of next()
     std::string col_path_, media_dir_, settings_path_;
     Mode mode_ = Mode::Setup;
     std::string message_title_, message_body_;
@@ -141,23 +172,38 @@ private:
         std::string html;
         std::unique_ptr<CardView> view;
     };
-    std::unique_ptr<Prefetch> prefetch_;           // ready to show
-    std::unique_ptr<Prefetch> prefetch_building_;  // being prepared, one step per idle frame
-    int prefetch_stage_ = 0;
+    std::unique_ptr<Prefetch> prefetch_;  // ready to show
+    // Being prepared on prep_ (its images decoded, script run, laid out).
+    struct PrefetchJob {
+        int64_t card_id = 0;
+        std::atomic<bool> done{false};
+        std::unique_ptr<Prefetch> result;  // null if it couldn't be rendered
+        double ms = 0;
+    };
+    std::shared_ptr<PrefetchJob> prefetch_job_;
     bool prefetch_due_ = false;
     void cancel_prefetch();
-    // The answer side, prepared while the question is on screen: its script
-    // runs one idle frame, it's laid out the next. Stage 0 nothing, 1 script
-    // due, 2 layout due, 3 ready.
-    int answer_stage_ = 0;
-    std::string answer_html_;
-    std::unique_ptr<CardView> answer_view_;
-    CardViewOptions answer_opts_;
-    void answer_step();
+    void start_prefetch();                               // for next_id_
+    void prepare_prefetch(std::shared_ptr<PrefetchJob> job, const StudyCard& c);  // the prep_ part
+    void submit_prep(std::shared_ptr<PrefetchJob> job, StudyCard c, CardViewOptions opt, bool scripts,
+                     std::string dir);
+    void collect_prefetch();                             // takes a finished job's result
+    // The answer side of the card on screen, prepared on prep_ while the
+    // question is showing: its script (in script_) and layout.
+    struct AheadJob {
+        std::atomic<bool> done{false};
+        std::string html;
+        std::unique_ptr<CardView> view;
+        CardViewOptions opts;
+        double ms = 0;
+    };
+    std::shared_ptr<AheadJob> ahead_;
+    void start_answer_ahead();
+    // before the main thread touches script_ or js_storage_ itself
+    void settle_prep();
     int unsynced_reviews_ = 0;  // shown before a full download replaces this copy
     bool download_requested_ = false;  // chosen in Settings rather than required by the server
     void confirm_download(bool requested);
-    void prefetch_step();  // one step of preparing the next card; clears prefetch_due_ when done
 
     // touch menu (bury, suspend, flag, mark, scratchpad) and the scratchpad itself
     bool menu_open_ = false;

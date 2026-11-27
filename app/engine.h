@@ -86,6 +86,10 @@ public:
     virtual std::vector<std::string> media_names(const std::vector<int64_t>& card_ids) = 0;
     virtual std::vector<std::string> deck_media_names(int64_t deck_id) = 0;
     virtual int unsynced_reviews() = 0;
+    // SD card reads/writes/flushes since the last call, for the timing log ("" if not measured)
+    virtual std::string io_stats() { return ""; }
+    // write the collection's write-ahead log back into it (a safe moment: lid closed, deck left)
+    virtual void checkpoint() {}
 
     // sync
     virtual bool login(const std::string& endpoint, const std::string& user, const std::string& pass,

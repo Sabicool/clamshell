@@ -7,10 +7,13 @@
 #include <cstring>
 #include <string>
 
+#include <exception>
+
 #include "app.h"
 #include "version.h"
 
 #include <sys/stat.h>
+#include <ctime>
 
 using namespace anki;
 
@@ -152,6 +155,140 @@ public:
 
 }  // namespace
 
+#ifndef ANKI3DS_SELFTEST
+// Buttons and touch are read every 4 ms on a high-priority thread, and
+// presses are kept until the app's next frame takes them. A frame that is
+// busy (laying out a card, say) would otherwise miss a press released before
+// it ended, and the button would seem to need pressing twice.
+class InputThread {
+public:
+    InputThread() {
+        LightLock_Init(&lock_);
+        s32 prio = 0x30;
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        thread_ = threadCreate(entry, this, 16 * 1024, prio > 0x19 ? prio - 1 : prio, -2, false);
+    }
+    ~InputThread() {
+        stop_ = true;
+        if (thread_) {
+            threadJoin(thread_, U64_MAX);
+            threadFree(thread_);
+        }
+    }
+    Input take() {
+        if (!thread_) scan();  // no thread: read now
+        LightLock_Lock(&lock_);
+        Input in;
+        in.down = map(down_) | (map(repeat_) & (K_UP | K_DOWN));  // D-pad up/down repeat in menus
+        in.held = map(held_);
+        in.touching = (held_ & KEY_TOUCH) != 0;
+        in.touch_down = touch_down_;
+        in.tx = touch_down_ ? down_x_ : x_;
+        in.ty = touch_down_ ? down_y_ : y_;
+        in.scroll = scroll_;
+        down_ = repeat_ = 0;
+        touch_down_ = false;
+        LightLock_Unlock(&lock_);
+        return in;
+    }
+
+private:
+    static uint32_t map(u32 k) {
+        uint32_t m = 0;
+        if (k & KEY_A) m |= K_A;
+        if (k & KEY_B) m |= K_B;
+        if (k & KEY_X) m |= K_X;
+        if (k & KEY_Y) m |= K_Y;
+        if (k & KEY_L) m |= K_L;
+        if (k & KEY_R) m |= K_R;
+        if (k & KEY_ZL) m |= K_ZL;
+        if (k & KEY_ZR) m |= K_ZR;
+        if (k & KEY_DUP) m |= K_UP;
+        if (k & KEY_DDOWN) m |= K_DOWN;
+        if (k & KEY_DLEFT) m |= K_LEFT;
+        if (k & KEY_DRIGHT) m |= K_RIGHT;
+        if (k & KEY_START) m |= K_START;
+        if (k & KEY_SELECT) m |= K_SELECT;
+        return m;
+    }
+    static void entry(void* self) {
+        auto* t = (InputThread*)self;
+        while (!t->stop_) {
+            t->scan();
+            svcSleepThread(4 * 1000000LL);
+        }
+    }
+    void scan() {
+        hidScanInput();
+        u32 down = hidKeysDown(), held = hidKeysHeld(), repeat = hidKeysDownRepeat();
+        touchPosition tp{};
+        if (held & KEY_TOUCH) hidTouchRead(&tp);
+        circlePosition cp, cs;
+        hidCircleRead(&cp);
+        hidCstickRead(&cs);
+        int scroll = 0;
+        if (cp.dy > 20 || cp.dy < -20) scroll = -cp.dy / 12;
+        if (cs.dy > 20 || cs.dy < -20) scroll += -cs.dy / 12;
+        LightLock_Lock(&lock_);
+        down_ |= down & ~KEY_TOUCH;
+        repeat_ |= repeat;
+        held_ = held;
+        if (held & KEY_TOUCH) {
+            x_ = tp.px;
+            y_ = tp.py;
+            if ((down & KEY_TOUCH) && !touch_down_) {
+                touch_down_ = true;
+                down_x_ = tp.px;
+                down_y_ = tp.py;
+            }
+        }
+        scroll_ = scroll;
+        LightLock_Unlock(&lock_);
+    }
+    LightLock lock_;
+    Thread thread_ = nullptr;
+    volatile bool stop_ = false;
+    u32 down_ = 0, repeat_ = 0, held_ = 0;
+    bool touch_down_ = false;
+    int x_ = 0, y_ = 0, down_x_ = 0, down_y_ = 0, scroll_ = 0;
+};
+#endif
+
+// When something can't go on (Anki's backend panicking, memory running out, an
+// uncaught C++ exception), abort() is called. Left alone, that frees the heap
+// under libctru's own threads and the console shows a crash screen with no
+// clue why. Instead: note what happened in crash.txt with the last timings,
+// say so on screen, and end the process at once.
+static App* g_app = nullptr;
+static u32 g_main_thread = 0;
+
+[[noreturn]] static void fatal(const char* why) {
+    static bool once = false;
+    if (!once) {
+        once = true;
+        if (g_app) g_app->flush_logs();
+        if (FILE* f = fopen("sdmc:/3ds/" APP_ID "/crash.txt", "a")) {
+            fprintf(f, "%lld app stopped: %s (heap %u bytes in use)\n", (long long)time(nullptr), why,
+                    (unsigned)mallinfo().uordblks);
+            fclose(f);
+        }
+        u32 me = 0;
+        svcGetThreadId(&me, CUR_THREAD_HANDLE);
+        // the error screen is an applet, which only the main thread can start
+        if (me != g_main_thread) svcExitProcess();
+        errorConf err;
+        errorInit(&err, ERROR_TEXT_WORD_WRAP, CFG_LANGUAGE_EN);
+        errorText(&err,
+                  "Clamshell hit a problem and has to close. Answers saved before this are kept. "
+                  "Details are in sdmc:/3ds/clamshell/crash.txt.");
+        errorDisp(&err);
+    }
+    svcExitProcess();
+    for (;;) {}
+}
+
+extern "C" [[noreturn]] void __wrap_abort(void) { fatal("abort"); }
+
 #ifdef ANKI3DS_SELFTEST
 // Runs sdmc:/3ds/clamshell/selftest.txt (same commands as host/sim.cpp) and
 // writes screenshots + selftest.log, then exits.
@@ -271,15 +408,32 @@ int main() {
 #else
 int main() {
     osSetSpeedupEnable(true);  // New 3DS: 804 MHz + extra cache
+    svcGetThreadId(&g_main_thread, CUR_THREAD_HANDLE);
+    std::set_terminate([] {
+        const char* what = "uncaught exception";
+        static std::string text;
+        if (auto e = std::current_exception()) {
+            try {
+                std::rethrow_exception(e);
+            } catch (const std::exception& x) {
+                text = std::string("uncaught exception: ") + x.what();
+                what = text.c_str();
+            } catch (...) {
+            }
+        }
+        fatal(what);
+    });
     gfxInitDefault();
     romfsInit();
     psInit();
     acInit();
-    hidSetRepeatParameters(20, 6);
+    // in input scans, every 4 ms (InputThread): first repeat after ~330 ms, then every ~100 ms
+    hidSetRepeatParameters(83, 25);
 
     Platform3ds pf;
     migrate_old_folder();
     App app(pf);
+    g_app = &app;
     app.init();
     // closing the lid (sleep) or opening the HOME Menu pauses the answer timer
     static aptHookCookie apt_cookie;
@@ -292,59 +446,27 @@ int main() {
         },
         &app);
 
+    InputThread input;
     Input prev;
-    bool was_touching = false;
+    uint32_t shown_draws = app.draws - 1;
+    bool second_copy = true;
     while (aptMainLoop()) {
-        hidScanInput();
-        u32 down = hidKeysDown();
-        u32 held = hidKeysHeld();
-        u32 repeat = hidKeysDownRepeat();
-        Input in;
-        auto map = [](u32 k) {
-            uint32_t m = 0;
-            if (k & KEY_A) m |= K_A;
-            if (k & KEY_B) m |= K_B;
-            if (k & KEY_X) m |= K_X;
-            if (k & KEY_Y) m |= K_Y;
-            if (k & KEY_L) m |= K_L;
-            if (k & KEY_R) m |= K_R;
-            if (k & KEY_ZL) m |= K_ZL;
-            if (k & KEY_ZR) m |= K_ZR;
-            if (k & KEY_DUP) m |= K_UP;
-            if (k & KEY_DDOWN) m |= K_DOWN;
-            if (k & KEY_DLEFT) m |= K_LEFT;
-            if (k & KEY_DRIGHT) m |= K_RIGHT;
-            if (k & KEY_START) m |= K_START;
-            if (k & KEY_SELECT) m |= K_SELECT;
-            return m;
-        };
-        // D-pad up/down repeat in menus; face buttons only on press
-        in.down = map(down) | (map(repeat) & (K_UP | K_DOWN));
-        in.held = map(held);
-        if (held & KEY_TOUCH) {
-            touchPosition t;
-            hidTouchRead(&t);
-            in.touching = true;
-            in.tx = t.px;
-            in.ty = t.py;
-            in.touch_down = !was_touching;
-        }
-        was_touching = (held & KEY_TOUCH) != 0;
-        circlePosition cp;
-        hidCircleRead(&cp);
-        if (cp.dy > 20 || cp.dy < -20) in.scroll = -cp.dy / 12;
-        circlePosition cs;
-        hidCstickRead(&cs);
-        if (cs.dy > 20 || cs.dy < -20) in.scroll += -cs.dy / 12;
-
+        Input in = input.take();
         if (!app.frame(in)) break;
-        blit(app.top, GFX_TOP);
-        blit(app.bottom, GFX_BOTTOM);
-        gfxFlushBuffers();
+        // Copying the canvases to the screens costs a few milliseconds a
+        // frame: only after a change, and once more for the second buffer.
+        if (app.draws != shown_draws || second_copy) {
+            second_copy = app.draws != shown_draws;
+            shown_draws = app.draws;
+            blit(app.top, GFX_TOP);
+            blit(app.bottom, GFX_BOTTOM);
+            gfxFlushBuffers();
+        }
         gfxSwapBuffers();
         gspWaitForVBlank();
         prev = in;
     }
+    g_app = nullptr;
 
     pf.net_down();
     acExit();

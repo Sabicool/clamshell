@@ -1,6 +1,7 @@
 // TrueType text via stb_truetype, with a glyph cache and per-codepoint fallback
 // across the bundled DejaVu faces.
 #pragma once
+#include <mutex>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -47,6 +48,8 @@ private:
     };
     std::vector<std::unique_ptr<Face>> faces_;
     std::unordered_map<uint64_t, Glyph> cache_;
+    // cards are laid out on a background thread while the interface draws
+    std::recursive_mutex m_;
     size_t cache_bytes_ = 0;
     const Glyph& glyph(FaceId face, float px, uint32_t cp, FaceId& used);
     FaceId resolve(FaceId face, uint32_t cp);

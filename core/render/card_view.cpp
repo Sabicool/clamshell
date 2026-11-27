@@ -1,3 +1,4 @@
+#include <chrono>
 #include "card_view.h"
 
 #include <algorithm>
@@ -23,6 +24,9 @@
 #define NANOSVGRAST_IMPLEMENTATION
 #include "nanosvg/nanosvg.h"
 #include "nanosvg/nanosvgrast.h"
+#include <list>
+#include <mutex>
+
 #include "webp/decode.h"
 #include "webp/demux.h"
 
@@ -237,7 +241,187 @@ html.night-mode, body.card.nightMode { background-color: #2b2b2b !important; bac
 .cloze { color: #7cb7ff; }
 )CSS";
 
+// Decoded images, shared by every card view: the answer side shows the
+// question's images again, and cards repeat images. Reading from the SD card
+// and decoding (WebP especially) is the slowest part of showing a card on a
+// 3DS, so the app also decodes a card's images ahead on its worker thread
+// (preload_media_images); hence the lock. Least recently used goes first.
+class ImageCache {
+public:
+    std::shared_ptr<Image> find(const std::string& key, bool& known) {
+        std::lock_guard<std::mutex> l(m_);
+        auto it = map_.find(key);
+        known = it != map_.end();
+        if (!known) return nullptr;
+        order_.splice(order_.begin(), order_, it->second.pos);
+        return it->second.img;
+    }
+    void put(const std::string& key, std::shared_ptr<Image> img) {
+        std::lock_guard<std::mutex> l(m_);
+        size_t bytes = img ? img->px.size() * 4 : 0;
+        if (bytes > LIMIT / 2 || map_.count(key)) return;
+        order_.push_front(key);
+        map_[key] = {img, order_.begin(), bytes};
+        bytes_ += bytes;
+        while (bytes_ > LIMIT && !order_.empty()) {
+            auto it = map_.find(order_.back());
+            bytes_ -= it->second.bytes;
+            map_.erase(it);
+            order_.pop_back();
+        }
+    }
+
+private:
+    static constexpr size_t LIMIT = 12u * 1024 * 1024;
+    struct Entry {
+        std::shared_ptr<Image> img;  // null: the file is missing or unreadable
+        std::list<std::string>::iterator pos;
+        size_t bytes;
+    };
+    std::mutex m_;
+    std::unordered_map<std::string, Entry> map_;
+    std::list<std::string> order_;
+    size_t bytes_ = 0;
+};
+ImageCache g_images;
+
+// Images wider than this are scaled down when decoded: the 3DS screen is 400
+// pixels wide, and the magnifier needs some detail to spare.
+const int MAX_IMAGE_W = 800;
+
+std::shared_ptr<Image> to_image(const unsigned char* data, int w, int h) {
+    int tw = w, th = h;
+    if (w > MAX_IMAGE_W) {
+        tw = MAX_IMAGE_W;
+        th = std::max(1, (int)((int64_t)h * MAX_IMAGE_W / w));
+    }
+    auto img = std::make_shared<Image>();
+    img->w = tw;
+    img->h = th;
+    img->px.resize((size_t)tw * th);
+    for (int y = 0; y < th; y++) {
+        int sy = (int)((int64_t)y * h / th);
+        for (int x = 0; x < tw; x++) {
+            int sx = (int)((int64_t)x * w / tw);
+            const unsigned char* p = data + ((size_t)sy * w + sx) * 4;
+            img->px[(size_t)y * tw + x] = rgba(p[0], p[1], p[2], p[3]);
+        }
+    }
+    return img;
+}
+
+std::shared_ptr<Image> decode_webp(const std::vector<uint8_t>& buf) {
+    WebPDecoderConfig cfg;
+    if (!WebPInitDecoderConfig(&cfg) || WebPGetFeatures(buf.data(), buf.size(), &cfg.input) != VP8_STATUS_OK)
+        return nullptr;
+    int w = cfg.input.width, h = cfg.input.height;
+    if (w <= 0 || h <= 0) return nullptr;
+    if (cfg.input.has_animation) {
+        // animated WebP: show the first frame
+        std::shared_ptr<Image> img;
+        WebPData wd{buf.data(), buf.size()};
+        WebPAnimDecoderOptions o;
+        WebPAnimDecoderOptionsInit(&o);
+        o.color_mode = MODE_RGBA;
+        if (WebPAnimDecoder* dec = WebPAnimDecoderNew(&wd, &o)) {
+            WebPAnimInfo info;
+            uint8_t* frame = nullptr;
+            int ts = 0;
+            if (WebPAnimDecoderGetInfo(dec, &info) && WebPAnimDecoderGetNext(dec, &frame, &ts))
+                img = to_image(frame, (int)info.canvas_width, (int)info.canvas_height);
+            WebPAnimDecoderDelete(dec);
+        }
+        return img;
+    }
+    // Decode straight to the size shown, without the smoothing passes: much
+    // less work for a 400-pixel screen.
+    int tw = w, th = h;
+    if (w > MAX_IMAGE_W) {
+        tw = MAX_IMAGE_W;
+        th = std::max(1, (int)((int64_t)h * MAX_IMAGE_W / w));
+        cfg.options.use_scaling = 1;
+        cfg.options.scaled_width = tw;
+        cfg.options.scaled_height = th;
+    }
+    cfg.options.no_fancy_upsampling = 1;
+    cfg.output.colorspace = MODE_RGBA;
+    if (WebPDecode(buf.data(), buf.size(), &cfg) != VP8_STATUS_OK) {
+        WebPFreeDecBuffer(&cfg.output);
+        return nullptr;
+    }
+    auto img = to_image(cfg.output.u.RGBA.rgba, tw, th);
+    WebPFreeDecBuffer(&cfg.output);
+    return img;
+}
+
+std::shared_ptr<Image> decode_file(const std::string& path, const std::string& name) {
+    bool svg = name.size() > 4 && strcasecmp(name.c_str() + name.size() - 4, ".svg") == 0;
+    if (svg) {
+        // Image Occlusion masks are SVG; rasterise them with nanosvg.
+        std::shared_ptr<Image> img;
+        NSVGimage* doc = nsvgParseFromFile(path.c_str(), "px", 96.0f);
+        if (doc && doc->width > 0 && doc->height > 0) {
+            float scale = doc->width > MAX_IMAGE_W ? MAX_IMAGE_W / doc->width : 1.0f;
+            int w = (int)(doc->width * scale), h = (int)(doc->height * scale);
+            std::vector<unsigned char> data((size_t)w * h * 4);
+            NSVGrasterizer* rast = nsvgCreateRasterizer();
+            nsvgRasterize(rast, doc, 0, 0, scale, data.data(), w, h, w * 4);
+            nsvgDeleteRasterizer(rast);
+            img = to_image(data.data(), w, h);
+        }
+        if (doc) nsvgDelete(doc);
+        return img;
+    }
+    // read the file once, then decode from memory
+    std::vector<uint8_t> buf;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (sz > 12 && sz < 32 * 1024 * 1024) {
+            buf.resize((size_t)sz);
+            if (fread(buf.data(), 1, buf.size(), f) != buf.size()) buf.clear();
+        }
+        fclose(f);
+    }
+    if (buf.size() < 12) return nullptr;
+    if (memcmp(buf.data(), "RIFF", 4) == 0 && memcmp(buf.data() + 8, "WEBP", 4) == 0) return decode_webp(buf);
+    int w = 0, h = 0, n = 0;
+    unsigned char* data = stbi_load_from_memory(buf.data(), (int)buf.size(), &w, &h, &n, 4);
+    if (!data) return nullptr;
+    auto img = to_image(data, w, h);
+    stbi_image_free(data);
+    return img;
+}
+
 }  // namespace
+
+std::shared_ptr<Image> load_media_image(const std::string& media_dir, const std::string& name) {
+    std::string key = media_dir + "/" + name;
+    bool known = false;
+    auto img = g_images.find(key, known);
+    if (known) return img;
+    img = decode_file(key, name);
+    g_images.put(key, img);
+    return img;
+}
+
+void preload_media_images(const std::string& media_dir, const std::string& html) {
+    if (media_dir.empty()) return;
+    // <img src="..."> (and src='...'); a script may add others, which load when shown
+    size_t p = 0;
+    while ((p = html.find("src=", p)) != std::string::npos) {
+        p += 4;
+        if (p >= html.size() || (html[p] != '"' && html[p] != '\'')) continue;
+        char q = html[p++];
+        size_t e = html.find(q, p);
+        if (e == std::string::npos) break;
+        std::string name = url_decode(html.substr(p, e - p));
+        p = e;
+        if (name.empty() || name.find("://") != std::string::npos || name.rfind("data:", 0) == 0) continue;
+        load_media_image(media_dir, name);
+    }
+}
 
 class CardContainer : public document_container {
 public:
@@ -259,94 +443,9 @@ public:
     std::shared_ptr<Image> image(const std::string& src) {
         auto it = images.find(src);
         if (it != images.end()) return it->second;
-        std::shared_ptr<Image> img;
         std::string name = url_decode(src);
-        if (name.find("://") == std::string::npos && !opt.media_dir.empty()) {
-            std::string path = opt.media_dir + "/" + name;
-            int w = 0, h = 0, n;
-            unsigned char* data = nullptr;
-            bool svg = name.size() > 4 && strcasecmp(name.c_str() + name.size() - 4, ".svg") == 0;
-            bool webp = false;
-            if (svg) {
-                // Image Occlusion masks are SVG; rasterise them with nanosvg.
-                NSVGimage* doc = nsvgParseFromFile(path.c_str(), "px", 96.0f);
-                if (doc && doc->width > 0 && doc->height > 0) {
-                    float scale = doc->width > 800 ? 800.0f / doc->width : 1.0f;
-                    w = (int)(doc->width * scale);
-                    h = (int)(doc->height * scale);
-                    data = (unsigned char*)malloc((size_t)w * h * 4);
-                    NSVGrasterizer* rast = nsvgCreateRasterizer();
-                    nsvgRasterize(rast, doc, 0, 0, scale, data, w, h, w * 4);
-                    nsvgDeleteRasterizer(rast);
-                }
-                if (doc) nsvgDelete(doc);
-            } else {
-                data = stbi_load(path.c_str(), &w, &h, &n, 4);
-                if (!data) {
-                    // WebP (common in shared decks like Malleus) isn't handled by stb_image
-                    FILE* f = fopen(path.c_str(), "rb");
-                    if (f) {
-                        std::vector<uint8_t> buf;
-                        fseek(f, 0, SEEK_END);
-                        long sz = ftell(f);
-                        fseek(f, 0, SEEK_SET);
-                        if (sz > 12 && sz < 32 * 1024 * 1024) {
-                            buf.resize((size_t)sz);
-                            if (fread(buf.data(), 1, buf.size(), f) == buf.size() &&
-                                memcmp(buf.data(), "RIFF", 4) == 0 && memcmp(buf.data() + 8, "WEBP", 4) == 0) {
-                                data = WebPDecodeRGBA(buf.data(), buf.size(), &w, &h);
-                                webp = data != nullptr;
-                                if (!data) {
-                                    // animated WebP: show the first frame
-                                    WebPData wd{buf.data(), buf.size()};
-                                    WebPAnimDecoderOptions o;
-                                    WebPAnimDecoderOptionsInit(&o);
-                                    o.color_mode = MODE_RGBA;
-                                    if (WebPAnimDecoder* dec = WebPAnimDecoderNew(&wd, &o)) {
-                                        WebPAnimInfo info;
-                                        uint8_t* frame = nullptr;
-                                        int ts = 0;
-                                        if (WebPAnimDecoderGetInfo(dec, &info) && WebPAnimDecoderGetNext(dec, &frame, &ts)) {
-                                            w = (int)info.canvas_width;
-                                            h = (int)info.canvas_height;
-                                            data = (unsigned char*)malloc((size_t)w * h * 4);
-                                            memcpy(data, frame, (size_t)w * h * 4);
-                                            svg = true;  // free() with free(), like the SVG path
-                                        }
-                                        WebPAnimDecoderDelete(dec);
-                                    }
-                                }
-                            }
-                        }
-                        fclose(f);
-                    }
-                }
-            }
-            if (data) {
-                // Downscale big images up front: the 3DS screen is 400px wide.
-                int maxw = 800;
-                int tw = w, th = h;
-                if (w > maxw) {
-                    tw = maxw;
-                    th = std::max(1, (int)((int64_t)h * maxw / w));
-                }
-                img = std::make_shared<Image>();
-                img->w = tw;
-                img->h = th;
-                img->px.resize((size_t)tw * th);
-                for (int y = 0; y < th; y++) {
-                    int sy = (int)((int64_t)y * h / th);
-                    for (int x = 0; x < tw; x++) {
-                        int sx = (int)((int64_t)x * w / tw);
-                        const unsigned char* p = data + ((size_t)sy * w + sx) * 4;
-                        img->px[(size_t)y * tw + x] = rgba(p[0], p[1], p[2], p[3]);
-                    }
-                }
-                if (svg) free(data);
-                else if (webp) WebPFree(data);
-                else stbi_image_free(data);
-            }
-        }
+        std::shared_ptr<Image> img;
+        if (name.find("://") == std::string::npos && !opt.media_dir.empty()) img = load_media_image(opt.media_dir, name);
         if (!img && getenv("ANKI3DS_DEBUG_IMG")) fprintf(stderr, "image failed: %s\n", name.c_str());
         images[src] = img;
         return img;
@@ -556,7 +655,14 @@ static void find_answer_anchor(const element::ptr& el, int& y) {
     for (auto& ch : el->children()) find_answer_anchor(ch, y);
 }
 
+RenderTimes g_render_times;
+
+static double now_ms() {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void CardView::render(const std::string& body_html, const std::string& css, int ord, const CardViewOptions& opt) {
+    double t0 = now_ms();
     container_->opt = opt;
     container_->handles.clear();
     std::string body = render_mathjax_in_html(io_fallback(strip_scripts(body_html), opt.media_dir));
@@ -573,9 +679,12 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
                            "</style></head><body class=\"card card" + std::to_string(ord + 1) +
                            (opt.night_mode ? " nightMode night_mode\"" + std::string(NIGHT_INLINE) : std::string("\"")) + ">" + body +
                            "</body></html>";
+    double t1 = now_ms();
     doc_ = document::createFromString(doc_html, container_.get());
     auto& doc = doc_;
+    double t2 = now_ms();
     doc->render((pixel_t)opt.width);
+    double t3 = now_ms();
     int h = std::max((int)std::ceil(doc->height()), opt.viewport_height);
     h = std::min(h, opt.max_height);
     content_h_ = h;
@@ -586,6 +695,11 @@ void CardView::render(const std::string& body_html, const std::string& css, int 
     doc->draw((uint_ptr)&canvas_, 0, 0, &clip);
     answer_y_ = -1;
     find_answer_anchor(doc->root(), answer_y_);
+    double t4 = now_ms();
+    g_render_times.prep_ms += t1 - t0;
+    g_render_times.parse_ms += t2 - t1;
+    g_render_times.layout_ms += t3 - t2;
+    g_render_times.draw_ms += t4 - t3;
 }
 
 void CardView::draw_zoomed(Canvas& out, float scale, float src_x, float src_y) const {

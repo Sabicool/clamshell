@@ -5,6 +5,8 @@
 
 #ifdef CLAMSHELL_ANKI
 
+#include <cstdio>
+
 #include "nlohmann/json.hpp"
 
 extern "C" {
@@ -174,6 +176,18 @@ public:
         return r.contains("names") ? r["names"].get<std::vector<std::string>>() : std::vector<std::string>{};
     }
     int unsynced_reviews() override { return call("unsynced_reviews").value("count", 0); }
+    std::string io_stats() override {
+        json r = call("io_stats");
+        if (r.contains("error")) return "";
+        char buf[160];
+        snprintf(buf, sizeof buf, "sd: %d reads %d ms, %d writes %d ms, %d flushes %d ms, %d other %d ms",
+                 r.value("reads", 0), r.value("read_ms", 0), r.value("writes", 0), r.value("write_ms", 0),
+                 r.value("syncs", 0), r.value("sync_ms", 0), r.value("other", 0), r.value("other_ms", 0));
+        return buf;
+    }
+    void checkpoint() override {
+        if (open_) call("checkpoint");
+    }
 
     bool login(const std::string& endpoint, const std::string& user, const std::string& pass, std::string& hkey,
                std::string& endpoint_out, std::string& err) override {

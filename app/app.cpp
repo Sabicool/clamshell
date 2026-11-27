@@ -84,7 +84,14 @@ static std::string fmt_offset(int32_t minutes_west) {
 
 App::App(Platform& p) : pf_(p) {}
 void flush_timing(const std::string& dir);
-App::~App() { flush_timing(pf_.data_dir()); }
+App::~App() {
+    finish_job();
+    worker_.wait();
+    prep_.wait();
+    flush_timing(pf_.data_dir());
+}
+
+void App::flush_logs() { flush_timing(pf_.data_dir()); }
 
 void App::init() {
     std::string dir = pf_.data_dir();
@@ -106,12 +113,19 @@ void App::init() {
     if (!engine_) engine_ = make_cpp_engine();
     if (exists(col_path_)) open_collection();
     else mode_ = Mode::Setup;
-    startup_sync_due_ = engine_->is_open() && mode_ == Mode::Decks && (settings_.auto_sync & 1);
+    startup_sync_due_ = eng()->is_open() && mode_ == Mode::Decks && (settings_.auto_sync & 1);
     dirty = true;
 }
 
 void App::on_pause() {
     if (!paused_at_ms_) paused_at_ms_ = pf_.local_clock_ms();
+    flush_timing(pf_.data_dir());
+    // the lid may stay closed until the battery runs out: get the answers so
+    // far into the collection file (queued behind any answer still saving)
+    if (engine_ && engine_->is_open()) {
+        Engine* e = engine_.get();
+        worker_.submit([e] { e->checkpoint(); });
+    }
 }
 
 void App::on_resume() {
@@ -126,12 +140,12 @@ int64_t App::utc_ms() {
 }
 
 void App::configure_clock() {
-    engine_->set_clock([this] { return utc_ms(); }, settings_.minutes_west.value_or(0));
+    eng()->set_clock([this] { return utc_ms(); }, settings_.minutes_west.value_or(0));
 }
 
 void App::open_collection() {
     std::string err;
-    if (!engine_->open(col_path_, err)) {
+    if (!eng()->open(col_path_, err)) {
         show_message("Couldn't open your collection", err + "\n\nYou can download it again from your sync server in Settings.",
                      Mode::Settings);
         return;
@@ -140,7 +154,7 @@ void App::open_collection() {
         // Use the host's time zone if it has one (desktop simulator), otherwise the
         // offset desktop Anki last recorded in the collection.
         auto sys = pf_.system_minutes_west();
-        int32_t west = sys ? *sys : engine_->recorded_minutes_west().value_or(settings_.minutes_west.value_or(0));
+        int32_t west = sys ? *sys : eng()->recorded_minutes_west().value_or(settings_.minutes_west.value_or(0));
         if (settings_.minutes_west != west) {
             settings_.minutes_west = west;
             settings_.save(settings_path_);
@@ -155,9 +169,9 @@ void App::open_collection() {
 
 void App::build_rows() {
     rows_.clear();
-    if (!engine_->is_open()) return;
+    if (!eng()->is_open()) return;
     std::vector<std::string> collapsed_names;  // children of these are hidden
-    for (const DeckEntry& d : engine_->decks()) {
+    for (const DeckEntry& d : eng()->decks()) {
         bool hidden = false;
         for (auto& cn : collapsed_names)
             if (d.full_name.size() > cn.size() + 2 && d.full_name.compare(0, cn.size(), cn) == 0 &&
@@ -193,12 +207,15 @@ bool App::frame(const Input& in) {
         startup_sync_due_ = false;
         sync_flow(true);
     }
-    // the frame after the answer appeared, with no button pressed: lay out the next card
-    if (prefetch_due_ && mode_ == Mode::Review && !in.down && !in.touch_down) {
-        prefetch_step();
+    // the answer saved in the background: show what the backend says
+    if (job_pending_ && job_done_) {
+        job_pending_ = false;
+        apply_job();
     }
-    if (answer_stage_ == 1 || answer_stage_ == 2) {
-        if (mode_ == Mode::Review && !answer_shown_ && !in.down && !in.touch_down) answer_step();
+    // the next card, prepared in the background, as soon as it's ready
+    if (mode_ == Mode::Review) {
+        collect_prefetch();
+        if (prefetch_due_ && !job_pending_) start_prefetch();
     }
     switch (mode_) {
         case Mode::Setup: on_setup(in); break;
@@ -265,6 +282,7 @@ void App::progress(const std::string& title, const std::string& detail) {
         y += 20;
     }
     text_centered(bottom, fonts_, {0, 100, 320, 30}, "Please wait…", 16, t.dim);
+    draws++;
     pf_.present(top, bottom);
 }
 
@@ -307,7 +325,7 @@ void App::draw_setup() {
 }
 
 void App::confirm_download(bool requested) {
-    unsynced_reviews_ = engine_->is_open() ? engine_->unsynced_reviews() : 0;
+    unsynced_reviews_ = eng()->is_open() ? eng()->unsynced_reviews() : 0;
     download_requested_ = requested;
     mode_ = Mode::ConfirmDownload;
     dirty = true;
@@ -327,7 +345,7 @@ void App::login_flow(bool custom_server) {
     if (!server_allowed(endpoint)) {
         show_message("AnkiWeb isn't available",
                      "AnkiWeb's terms only allow Anki's own apps. Use your own sync server's address instead.",
-                     engine_->is_open() ? Mode::Settings : Mode::Setup);
+                     eng()->is_open() ? Mode::Settings : Mode::Setup);
         return;
     }
     std::string user, pass;
@@ -340,16 +358,16 @@ void App::login_flow(bool custom_server) {
         return;
     }
     std::string key, final_endpoint;
-    if (!engine_->login(endpoint, user, pass, key, final_endpoint, err)) {
+    if (!eng()->login(endpoint, user, pass, key, final_endpoint, err)) {
         pf_.net_down();
-        show_message("Sign-in failed", err, engine_->is_open() ? Mode::Settings : Mode::Setup);
+        show_message("Sign-in failed", err, eng()->is_open() ? Mode::Settings : Mode::Setup);
         return;
     }
     settings_.endpoint = final_endpoint;
     settings_.hkey = key;
     settings_.username = user;
     settings_.save(settings_path_);
-    if (!engine_->is_open()) {
+    if (!eng()->is_open()) {
         pf_.net_down();
         full_download_flow();
     } else {
@@ -408,7 +426,7 @@ void App::sync_flow(bool automatic) {
         }
         return;
     }
-    SyncOutcome r = engine_->sync(settings_.endpoint, settings_.hkey,
+    SyncOutcome r = eng()->sync(settings_.endpoint, settings_.hkey,
                                   [this](const std::string& s) { progress("Syncing…", s); });
     pf_.net_down();
     if (r.new_endpoint) {
@@ -419,7 +437,7 @@ void App::sync_flow(bool automatic) {
         case SyncOutcome::NoChanges:
         case SyncOutcome::Synced: {
             if (settings_.tz_auto && !pf_.system_minutes_west()) {
-                int32_t west = engine_->recorded_minutes_west().value_or(settings_.minutes_west.value_or(0));
+                int32_t west = eng()->recorded_minutes_west().value_or(settings_.minutes_west.value_or(0));
                 if (west != settings_.minutes_west) {
                     settings_.minutes_west = west;
                     settings_.save(settings_path_);
@@ -463,13 +481,13 @@ void App::sync_after_studying() {
 
 void App::full_download_flow() {
     if (!server_allowed(settings_.endpoint)) {
-        show_message("AnkiWeb isn't available", ANKIWEB_BLOCKED, engine_->is_open() ? Mode::Decks : Mode::Setup);
+        show_message("AnkiWeb isn't available", ANKIWEB_BLOCKED, eng()->is_open() ? Mode::Decks : Mode::Setup);
         return;
     }
     std::string err;
     progress("Downloading collection…", "Connecting");
     if (!pf_.net_up(err)) {
-        show_message("No network", err, engine_->is_open() ? Mode::Decks : Mode::Setup);
+        show_message("No network", err, eng()->is_open() ? Mode::Decks : Mode::Setup);
         return;
     }
     size_t last_mb = (size_t)-1;
@@ -483,10 +501,10 @@ void App::full_download_flow() {
             progress("Downloading collection…", buf);
         }
     };
-    bool ok = engine_->full_download(settings_.endpoint, settings_.hkey, col_path_, on_bytes, err);
+    bool ok = eng()->full_download(settings_.endpoint, settings_.hkey, col_path_, on_bytes, err);
     pf_.net_down();
     if (!ok) {
-        show_message("Download failed", err, engine_->is_open() ? Mode::Decks : Mode::Setup);
+        show_message("Download failed", err, eng()->is_open() ? Mode::Decks : Mode::Setup);
         return;
     }
     open_collection();
@@ -496,7 +514,7 @@ void App::full_download_flow() {
 
 void App::media_flow(int64_t deck_id, bool quiet) {
     if (settings_.hkey.empty()) return;
-    auto names = missing_files(engine_->deck_media_names(deck_id), media_dir_);
+    auto names = missing_files(eng()->deck_media_names(deck_id), media_dir_);
     if (names.empty()) {
         if (!quiet) show_message("Images", "All images for this deck are already on the SD card.", Mode::Decks);
         return;
@@ -624,7 +642,7 @@ void App::draw_decks() {
         text(bottom, fonts_, 12, y + 2, due, 13, t.dim);
         if (preset_deck_ != r.id) {
             preset_deck_ = r.id;
-            preset_name_ = engine_->deck_preset(r.id);
+            preset_name_ = eng()->deck_preset(r.id);
         }
         if (!preset_name_.empty())
             text(bottom, fonts_, 12, y + 20, fit(fonts_, "Preset: " + preset_name_, 12, 296), 12, t.dim);
@@ -665,6 +683,12 @@ void flush_timing(const std::string& dir) {
     timing_buf_.clear();
 }
 #define STEP_MARK() (step_t_ = pf_.local_clock_ms())
+#define STEP_NOTE(text)                                                         \
+    do {                                                                        \
+        timing_buf_ += "    ";                                                  \
+        timing_buf_ += (text);                                                  \
+        timing_buf_ += "\n";                                                    \
+    } while (0)
 #ifdef ANKI3DS_SELFTEST
 #define TIMING_FLUSH_AT 0
 #else
@@ -687,7 +711,7 @@ void App::start_review(int64_t deck_id) {
     deck_id_ = deck_id;
     progress("Loading…", "Building today's queue");
     std::string err;
-    if (!engine_->start(deck_id, err)) {
+    if (!eng()->start(deck_id, err)) {
         show_message("Couldn't open the deck", err, Mode::Decks);
         return;
     }
@@ -695,7 +719,7 @@ void App::start_review(int64_t deck_id) {
     // fetch images for today's cards only (works the same for filtered decks);
     // Y on the deck list fetches a whole deck
     if (settings_.auto_media && !settings_.hkey.empty()) {
-        auto missing = missing_files(engine_->media_names(engine_->todays_card_ids()), media_dir_);
+        auto missing = missing_files(eng()->media_names(eng()->todays_card_ids()), media_dir_);
         STEP_TIME("image check");
         if (!missing.empty()) fetch_media(missing, true);
         STEP_TIME("image download");
@@ -707,7 +731,22 @@ void App::start_review(int64_t deck_id) {
 void App::next_card() {
     STEP_MARK();
     std::string err;
-    card_ = engine_->next(counts_, next_id_, err, prefetch_ ? prefetch_->card_id : 0);
+    card_ = eng()->next(counts_, next_id_, err, prefetch_ ? prefetch_->card_id : 0);
+    can_undo_ = eng()->can_undo();
+    present_card(err);
+}
+
+void App::present_card(const std::string& err) {
+    // the card on screen's answer may still be running in script_
+    if (ahead_ && !ahead_->done) prep_.wait_until([this] { return ahead_->done.load(); });
+    ahead_.reset();
+    collect_prefetch();
+    // the next card may be on its way already: better to wait for it than redo it
+    if (card_ && prefetch_job_ && prefetch_job_->card_id == card_->id && !prefetch_job_->done) {
+        auto job = prefetch_job_;
+        prep_.wait_until([job] { return job->done.load(); });
+        collect_prefetch();
+    }
     if (card_ && card_->prepared && prefetch_ && prefetch_->card_id == card_->id) {
         // details the engine left out because the app already rendered this card
         const StudyCard& p = prefetch_->card;
@@ -724,13 +763,12 @@ void App::next_card() {
     } else if (card_ && card_->prepared) {
         // shouldn't happen, but render it rather than show nothing
         cancel_prefetch();
-        if (auto full = engine_->render(card_->id)) {
+        if (auto full = eng()->render(card_->id)) {
             full->kind = card_->kind;
             full->labels = card_->labels;
             card_ = full;
         }
     }
-    can_undo_ = engine_->can_undo();
     if (!card_) {
         if (!err.empty()) {
             show_message("Couldn't load the next card", err, Mode::Decks);
@@ -761,6 +799,7 @@ void App::next_card() {
         STEP_TIME("  prefetched");
     } else {
         cancel_prefetch();
+        settle_prep();  // a discarded job may still be using js_storage_
         rendered_.question = card_->question;
         rendered_.answer = card_->answer;
         rendered_.css = card_->css;
@@ -781,8 +820,7 @@ void App::next_card() {
     shown_at_ms_ = pf_.local_clock_ms();
     mode_ = Mode::Review;
     dirty = true;
-    answer_view_.reset();
-    answer_stage_ = 1;
+    start_answer_ahead();
 }
 
 CardViewOptions App::view_options() const {
@@ -811,103 +849,135 @@ void App::render_current() {
 
 void App::cancel_prefetch() {
     prefetch_.reset();
-    prefetch_building_.reset();
-    prefetch_stage_ = 0;
+    prefetch_job_.reset();  // a job still running finishes on its own, unused
 }
 
-// Preparing the next card takes three steps (Anki renders it, its script
-// runs, it's laid out), one per frame, so a button pressed meanwhile waits
-// for one step rather than all three.
-void App::prefetch_step() {
-    if (prefetch_stage_ == 0) {
-        cancel_prefetch();
-        if (!next_id_) {
-            prefetch_due_ = false;
-            return;
-        }
-        STEP_MARK();
-        auto c = engine_->render(next_id_);
-        STEP_TIME("prefetch: Anki render");
+void App::settle_prep() {
+    prep_.wait();
+    collect_prefetch();
+}
+
+void App::collect_prefetch() {
+    if (!prefetch_job_ || !prefetch_job_->done) return;
+    auto job = std::move(prefetch_job_);
+    char line[64];
+    snprintf(line, sizeof line, "prepared next card in the background: %.0f ms", job->ms);
+    STEP_NOTE(line);
+    if (job->result) prefetch_ = std::move(job->result);
+}
+
+// The likely next card: Anki renders it on worker_, then prep_ decodes its
+// images, runs its script and lays it out. Nothing here waits.
+void App::start_prefetch() {
+    prefetch_due_ = false;
+    if (!next_id_ || (prefetch_ && prefetch_->card_id == next_id_)) return;
+    if (prefetch_job_ && prefetch_job_->card_id == next_id_) return;
+    cancel_prefetch();
+    auto job = std::make_shared<PrefetchJob>();
+    job->card_id = next_id_;
+    prefetch_job_ = job;
+    Engine* e = engine_.get();
+    int64_t id = next_id_;
+    CardViewOptions opt = view_options();
+    opt.reveal_hidden = false;  // question side
+    bool scripts = settings_.run_scripts;
+    std::string dir = media_dir_;
+    worker_.submit([this, e, id, job, opt, scripts, dir] {
+        auto c = e->render(id);
         if (!c) {
-            prefetch_due_ = false;
+            job->done = true;
             return;
         }
+        submit_prep(job, *c, opt, scripts, dir);
+    });
+}
+
+void App::prepare_prefetch(std::shared_ptr<PrefetchJob> job, const StudyCard& c) {
+    CardViewOptions opt = view_options();
+    opt.reveal_hidden = false;  // question side
+    submit_prep(job, c, opt, settings_.run_scripts, media_dir_);
+}
+
+// Any thread: everything it needs is passed in.
+void App::submit_prep(std::shared_ptr<PrefetchJob> job, StudyCard c, CardViewOptions opt, bool scripts,
+                      std::string dir) {
+    prep_.submit([this, job, c, opt, scripts, dir] {
+        int64_t t0 = pf_.local_clock_ms();
+        preload_media_images(dir, c.question + c.answer);
         auto p = std::make_unique<Prefetch>();
-        p->card_id = c->id;
-        p->card = *c;
-        p->rendered.question = c->question;
-        p->rendered.answer = c->answer;
-        p->rendered.css = c->css;
-        p->rendered.ord = c->ord;
-        prefetch_building_ = std::move(p);
-        prefetch_stage_ = 1;
-        return;
-    }
-    Prefetch* p = prefetch_building_.get();
-    if (!p) {
-        prefetch_stage_ = 0;
-        prefetch_due_ = false;
-        return;
-    }
-    if (prefetch_stage_ == 1) {
-        STEP_MARK();
-        if (settings_.run_scripts) {
+        p->card_id = c.id;
+        p->card = c;
+        p->rendered.question = c.question;
+        p->rendered.answer = c.answer;
+        p->rendered.css = c.css;
+        p->rendered.ord = c.ord;
+        if (scripts) {
             p->script = std::make_unique<js::CardScript>();
             p->html = p->script->run(p->rendered.question, js_storage_);
         } else {
             p->html = p->rendered.question;
         }
-        STEP_TIME("prefetch: card script");
-        prefetch_stage_ = 2;
-        return;
-    }
-    STEP_MARK();
-    p->view = std::make_unique<CardView>(fonts_);
-    CardViewOptions opt = view_options();
-    opt.reveal_hidden = false;  // question side
-    p->view->render(p->html, p->rendered.css, p->rendered.ord, opt);
-    STEP_TIME("prefetch: layout");
-    prefetch_ = std::move(prefetch_building_);
-    prefetch_stage_ = 0;
-    prefetch_due_ = false;
+        p->view = std::make_unique<CardView>(fonts_);
+        p->view->render(p->html, p->rendered.css, p->rendered.ord, opt);
+        job->result = std::move(p);
+        job->ms = (double)(pf_.local_clock_ms() - t0);
+        job->done = true;
+    });
 }
 
-void App::answer_step() {
-    STEP_MARK();
-    if (answer_stage_ == 1) {
-        answer_html_ = script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
-        STEP_TIME("answer ahead: card script");
-        answer_stage_ = 2;
-        return;
-    }
-    answer_opts_ = view_options();
-    answer_opts_.reveal_hidden = settings_.reveal_hidden;  // as it will be once the answer shows
-    answer_view_ = std::make_unique<CardView>(fonts_);
-    answer_view_->render(answer_html_, rendered_.css, rendered_.ord, answer_opts_);
-    STEP_TIME("answer ahead: layout");
-    answer_stage_ = 3;
+// The answer of the card on screen, run and laid out on prep_ while the
+// question shows. It runs in script_, which the main thread then leaves
+// alone until the job is done (settle_prep).
+void App::start_answer_ahead() {
+    auto a = std::make_shared<AheadJob>();
+    a->opts = view_options();
+    a->opts.reveal_hidden = settings_.reveal_hidden;  // as it will be once the answer shows
+    ahead_ = a;
+    js::CardScript* sc = script_.get();
+    std::string answer = rendered_.answer, css = rendered_.css, dir = media_dir_;
+    int ord = rendered_.ord;
+    prep_.submit([this, a, sc, answer, css, ord, dir] {
+        int64_t t0 = pf_.local_clock_ms();
+        preload_media_images(dir, answer);
+        a->html = sc ? sc->show_answer(answer) : answer;
+        a->view = std::make_unique<CardView>(fonts_);
+        a->view->render(a->html, css, ord, a->opts);
+        a->ms = (double)(pf_.local_clock_ms() - t0);
+        a->done = true;
+    });
 }
 
 void App::show_answer() {
     STEP_MARK();
     answer_shown_ = true;
-    int stage = answer_stage_;
-    answer_stage_ = 0;
-    current_html_ = stage >= 2 ? answer_html_ : script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
-    STEP_TIME("answer: card script");
-    CardViewOptions now = view_options();
-    if (stage == 3 && answer_view_ && now.text_zoom == answer_opts_.text_zoom &&
-        now.night_mode == answer_opts_.night_mode && now.reveal_hidden == answer_opts_.reveal_hidden) {
-        std::swap(view_, answer_view_);
-        dirty = true;
-        zoom_dirty_ = true;
-        if (zoom_open_) clamp_zoom();
-        STEP_TIME("answer: prepared");
+    auto a = std::move(ahead_);
+    if (a) {
+        if (!a->done) {
+            prep_.wait_until([&] { return a->done.load(); });
+            STEP_TIME("answer: waited for it");
+        }
+        char line[64];
+        snprintf(line, sizeof line, "answer prepared in the background: %.0f ms", a->ms);
+        STEP_NOTE(line);
+        current_html_ = a->html;
+        CardViewOptions now = view_options();
+        if (a->view && now.text_zoom == a->opts.text_zoom && now.night_mode == a->opts.night_mode &&
+            now.reveal_hidden == a->opts.reveal_hidden) {
+            std::swap(view_, a->view);
+            dirty = true;
+            zoom_dirty_ = true;
+            if (zoom_open_) clamp_zoom();
+            STEP_TIME("answer: prepared");
+        } else {
+            render_current();
+            STEP_TIME("answer: layout+draw");
+        }
     } else {
+        settle_prep();
+        current_html_ = script_ ? script_->show_answer(rendered_.answer) : rendered_.answer;
         render_current();
-        STEP_TIME("answer: layout+draw");
+        STEP_TIME("answer: script+layout+draw");
     }
-    answer_view_.reset();
     int anchor = view_->answer_anchor();
     scroll_ = anchor > 60 ? std::min(anchor - 40, max_scroll()) : 0;
     dirty = true;
@@ -917,22 +987,136 @@ void App::show_answer() {
 void App::answer(Rating r) {
     if (!card_) return;
     uint32_t millis = (uint32_t)std::max<int64_t>(0, pf_.local_clock_ms() - shown_at_ms_);
+    finish_job();  // the previous answer decides which card this is
+    if (!card_ || mode_ != Mode::Review) return;
     STEP_MARK();
-    std::string err;
-    if (!engine_->answer((int)r, millis, err)) {
-        show_message("Couldn't save the answer", err, Mode::Decks);
+    // The card the backend expects next is laid out already: show it now and
+    // save the answer on the worker, which also confirms what comes next.
+    collect_prefetch();
+    if (!prefetch_ && prefetch_job_ && prefetch_job_->card_id == next_id_ && next_id_) {
+        auto job = prefetch_job_;  // nearly ready: worth the wait
+        prep_.wait_until([job] { return job->done.load(); });
+        collect_prefetch();
+        STEP_TIME("  waited for the next card");
+    }
+    bool ahead = prefetch_ && next_id_ && prefetch_->card_id == next_id_;
+    if (!ahead) {
+        std::string err;
+        if (!eng()->answer((int)r, millis, err)) {
+            show_message("Couldn't save the answer", err, Mode::Decks);
+            return;
+        }
+        STEP_TIME("answer saved");
+        std::string io = eng()->io_stats();
+        if (!io.empty()) STEP_NOTE(io.c_str());
+        reviewed_++;
+        next_card();
         return;
     }
-    STEP_TIME("answer saved");
+    int64_t shown = next_id_;
+    Engine* e = engine_.get();
+    int rating = (int)r;
+    job_ = AnswerJob{};
+    job_.started_ms = pf_.local_clock_ms();
+    job_done_ = false;
+    job_pending_ = true;
+    pending_id_ = shown;
+    Platform* pf = &pf_;
+    worker_.submit([this, e, pf, rating, millis, shown] {
+        AnswerJob& j = job_;  // the worker's alone until job_done_
+        j.ok = e->answer(rating, millis, j.err);
+        j.saved_ms = pf->local_clock_ms();
+        if (j.ok) {
+            j.card = e->next(j.counts, j.next_id, j.err, shown);
+            j.can_undo = e->can_undo();
+            if (j.card && j.card->id == shown && j.next_id) j.next_render = e->render(j.next_id);
+            j.io = e->io_stats();
+        }
+        job_done_ = true;
+    });
     reviewed_++;
-    next_card();
+    // the counts until the backend's arrive: one fewer of the kind just answered
+    // (an Again on a learning card brings it back, and the backend's numbers say so)
+    if (card_->kind == "new" && counts_.new_count) counts_.new_count--;
+    else if (card_->kind == "review" && counts_.review_count) counts_.review_count--;
+    else if (card_->kind == "learn" && counts_.learn_count && rating > 1) counts_.learn_count--;
+    card_ = prefetch_->card;
+    card_->labels.clear();  // the intervals arrive with the backend's answer
+    card_->prepared = false;
+    can_undo_ = true;
+    present_card("");
+    STEP_TIME("  next card shown");
+}
+
+Engine* App::eng() {
+    finish_job();
+    worker_.wait();  // e.g. a checkpoint
+    return engine_.get();
+}
+
+void App::finish_job() {
+    if (!job_pending_) return;
+    while (!job_done_) worker_.wait();
+    job_pending_ = false;
+    apply_job();
+}
+
+void App::apply_job() {
+    AnswerJob j = std::move(job_);
+    job_ = AnswerJob{};
+    int64_t now = pf_.local_clock_ms();
+    char line[96];
+    snprintf(line, sizeof line, "background: saved %lld ms, next %lld ms",
+             (long long)(j.saved_ms - j.started_ms), (long long)(now - j.saved_ms));
+    STEP_NOTE(line);
+    if (!j.io.empty()) STEP_NOTE(j.io.c_str());
+    int64_t shown = pending_id_;
+    pending_id_ = 0;
+    if (!j.ok) {
+        show_message("Couldn't save the answer", j.err, Mode::Decks);
+        return;
+    }
+    counts_ = j.counts;
+    next_id_ = j.next_id;
+    can_undo_ = j.can_undo;
+    if (mode_ != Mode::Review) return;  // left the deck meanwhile
+    if (j.card && card_ && j.card->id == shown && card_->id == shown) {
+        // as expected: fill in the intervals, and get the card after ready
+        card_->labels = j.card->labels;
+        card_->kind = j.card->kind;
+        labels_ = card_->labels;
+        dirty = true;
+        cancel_prefetch();
+        if (j.next_render) {
+            auto job = std::make_shared<PrefetchJob>();
+            job->card_id = j.next_render->id;
+            prefetch_job_ = job;
+            prepare_prefetch(job, *j.next_render);
+            next_id_ = j.next_render->id;
+            return;
+        }
+        prefetch_due_ = next_id_ != 0;
+        return;
+    }
+    // Another card is due instead (a learning card came back, say), or none.
+    cancel_prefetch();
+    card_ = std::move(j.card);
+    if (card_ && card_->prepared) {
+        if (auto full = eng()->render(card_->id)) {
+            full->kind = card_->kind;
+            full->labels = card_->labels;
+            card_ = full;
+        }
+    }
+    STEP_MARK();
+    present_card(j.err);
 }
 
 void App::undo() {
-    if (!engine_->can_undo()) return;
+    if (!eng()->can_undo()) return;
     bool was_answer = true;
     std::string err;
-    if (!engine_->undo(was_answer, err)) return;
+    if (!eng()->undo(was_answer, err)) return;
     if (was_answer && reviewed_ > 0) reviewed_--;
     cancel_prefetch();
     status_ = "Undid the last change";
@@ -1049,7 +1233,7 @@ void App::draw_zoom() {
 void App::card_action(CardAction op, int flag) {
     if (!card_) return;
     std::string err;
-    if (!engine_->card_action(op, flag, *card_, err)) {
+    if (!eng()->card_action(op, flag, *card_, err)) {
         show_message("Couldn't change the card", err, Mode::Review);
         return;
     }
@@ -1129,16 +1313,18 @@ void App::run_action(const std::string& a) {
         // the card's script may change shared storage, so the prepared next card is redone
         cancel_prefetch();
         if (answer_shown_) prefetch_due_ = true;
-        if (!answer_shown_ && answer_stage_ >= 2) {
+        settle_prep();
+        bool restart_ahead = false;
+        if (!answer_shown_ && ahead_) {
             // the answer was prepared in this script already: start it again on the question
+            ahead_.reset();
             script_ = std::make_unique<js::CardScript>();
             current_html_ = script_->run(rendered_.question, js_storage_);
+            restart_ahead = true;
         }
-        if (!answer_shown_) {
-            answer_view_.reset();
-            answer_stage_ = 1;
-        }
-        if (script_->key(a.substr(4))) {
+        bool changed = script_->key(a.substr(4));
+        if (restart_ahead) start_answer_ahead();
+        if (changed) {
             current_html_ = script_->html();
             int keep = scroll_;
             render_current();
@@ -1385,6 +1571,10 @@ void App::on_review(const Input& in) {
         flush_timing(pf_.data_dir());
         build_rows();
         mode_ = Mode::Decks;
+        {
+            Engine* e = eng();
+            worker_.submit([e] { e->checkpoint(); });
+        }
         sync_after_studying();
         return;
     }
@@ -1528,7 +1718,7 @@ void App::on_settings(const Input& in) {
     bool activate = (in.down & K_A) != 0;
     if (in.down & (K_B | K_SELECT | K_START)) {
         settings_.save(settings_path_);
-        if (engine_->is_open()) {
+        if (eng()->is_open()) {
             build_rows();
             mode_ = Mode::Decks;
         } else {
@@ -1665,6 +1855,7 @@ void App::draw_message() {
 
 void App::draw() {
     dirty = false;
+    draws++;
     switch (mode_) {
         case Mode::Setup: draw_setup(); break;
         case Mode::Decks: draw_decks(); break;

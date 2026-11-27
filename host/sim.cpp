@@ -60,7 +60,21 @@ static void save_shot(App& app, const std::string& path) {
     out.save_png(path);
 }
 
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
+static void on_crash(int sig) {
+    void* frames[64];
+    int n = backtrace(frames, 64);
+    fprintf(stderr, "crashed with signal %d\n", sig);
+    backtrace_symbols_fd(frames, n, 2);
+    _exit(128 + sig);
+}
+
 int main(int argc, char** argv) {
+    signal(SIGSEGV, on_crash);
+    signal(SIGBUS, on_crash);
+    signal(SIGABRT, on_crash);
     if (argc < 4) {
         fprintf(stderr, "usage: anki3ds-sim <data dir> <script> <shot dir>\n");
         return 2;
