@@ -398,7 +398,15 @@ static const char* ANKIWEB_BLOCKED =
 
 // automatic: started by the "Sync automatically" setting. Problems go in the
 // deck list's status line rather than a message, except a full download, which always asks.
+void App::free_for_network() {
+    settle_prep();
+    cancel_prefetch();
+    ahead_.reset();
+    clear_media_image_cache();
+}
+
 void App::sync_flow(bool automatic) {
+    free_for_network();
     if (settings_.hkey.empty()) {
         if (!automatic) show_message("Not signed in", "Sign in to your sync server from Settings first.", Mode::Decks);
         return;
@@ -480,6 +488,7 @@ void App::sync_after_studying() {
 }
 
 void App::full_download_flow() {
+    free_for_network();
     if (!server_allowed(settings_.endpoint)) {
         show_message("AnkiWeb isn't available", ANKIWEB_BLOCKED, eng()->is_open() ? Mode::Decks : Mode::Setup);
         return;
@@ -987,8 +996,11 @@ void App::show_answer() {
 void App::answer(Rating r) {
     if (!card_) return;
     uint32_t millis = (uint32_t)std::max<int64_t>(0, pf_.local_clock_ms() - shown_at_ms_);
+    int64_t rated = card_->id;
     finish_job();  // the previous answer decides which card this is
-    if (!card_ || mode_ != Mode::Review) return;
+    // the backend put another card first (a learning card came back, say):
+    // that one is on screen now, and the press was meant for the one before
+    if (!card_ || mode_ != Mode::Review || card_->id != rated) return;
     STEP_MARK();
     // The card the backend expects next is laid out already: show it now and
     // save the answer on the worker, which also confirms what comes next.

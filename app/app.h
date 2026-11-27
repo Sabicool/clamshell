@@ -201,6 +201,8 @@ private:
     void start_answer_ahead();
     // before the main thread touches script_ or js_storage_ itself
     void settle_prep();
+    // drops prepared cards and decoded images: a sync or full download needs the memory
+    void free_for_network();
     int unsynced_reviews_ = 0;  // shown before a full download replaces this copy
     bool download_requested_ = false;  // chosen in Settings rather than required by the server
     void confirm_download(bool requested);

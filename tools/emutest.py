@@ -90,8 +90,12 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         env = dict(os.environ, SYNC_USER1="test:test", SYNC_BASE=os.path.join(tmp, "server"),
                    SYNC_HOST="127.0.0.1", SYNC_PORT=str(PORT), RUST_LOG="anki=warn")
+        # EMU_SERVER_LOG: keep the sync server's log (with RUST_LOG=info, it explains failed syncs)
+        server_log = open(os.environ["EMU_SERVER_LOG"], "w") if os.environ.get("EMU_SERVER_LOG") else subprocess.DEVNULL
+        if os.environ.get("EMU_SERVER_LOG"):
+            env["RUST_LOG"] = "info"
         server = subprocess.Popen([sys.executable, "-m", "anki.syncserver"], env=env,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  stdout=server_log, stderr=server_log)
         emu = None
         try:
             wait_port(PORT)

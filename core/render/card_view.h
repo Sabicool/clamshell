@@ -38,6 +38,8 @@ extern RenderTimes g_render_times;
 std::shared_ptr<Image> load_media_image(const std::string& media_dir, const std::string& name);
 // Decodes the images a card's HTML refers to, so showing it later is quick.
 void preload_media_images(const std::string& media_dir, const std::string& html);
+// Frees the decoded images (before a sync or download, which need the memory).
+void clear_media_image_cache();
 
 class CardView {
 public:

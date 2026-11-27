@@ -256,6 +256,12 @@ public:
         order_.splice(order_.begin(), order_, it->second.pos);
         return it->second.img;
     }
+    void clear() {
+        std::lock_guard<std::mutex> l(m_);
+        map_.clear();
+        order_.clear();
+        bytes_ = 0;
+    }
     void put(const std::string& key, std::shared_ptr<Image> img) {
         std::lock_guard<std::mutex> l(m_);
         size_t bytes = img ? img->px.size() * 4 : 0;
@@ -405,6 +411,8 @@ std::shared_ptr<Image> load_media_image(const std::string& media_dir, const std:
     g_images.put(key, img);
     return img;
 }
+
+void clear_media_image_cache() { g_images.clear(); }
 
 void preload_media_images(const std::string& media_dir, const std::string& html) {
     if (media_dir.empty()) return;
